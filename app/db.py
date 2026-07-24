@@ -46,6 +46,9 @@ def _migrate() -> None:
         "print_jobs": {
             "energy_unavailable": "ALTER TABLE print_jobs ADD COLUMN energy_unavailable BOOLEAN DEFAULT 0",
         },
+        "orders": {
+            "folder": "ALTER TABLE orders ADD COLUMN folder VARCHAR",
+        },
         "printers": {
             "orca_aliases": "ALTER TABLE printers ADD COLUMN orca_aliases JSON",
             "multicolor": "ALTER TABLE printers ADD COLUMN multicolor BOOLEAN DEFAULT 0",

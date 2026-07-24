@@ -29,9 +29,12 @@ from ..models import (
     SETTING_COMPANY_NAME,
     SETTING_CURRENCY,
     SETTING_ELECTRICITY_PRICE,
+    SETTING_ORDERS_FOLDER_BASE,
     SETTING_PAYMENT_INFO,
     SETTING_QUOTE_TERMS,
     Material,
+    Order,
+    OrderItem,
     PrintJob,
     Printer,
     Setting,
@@ -41,6 +44,7 @@ from ..schemas import (
     JobOut,
     MaterialIn,
     MaterialOut,
+    OrderIn,
     PrinterIn,
     PrinterOut,
     SettingsIn,
@@ -52,6 +56,19 @@ from ..services.calibration import rescan_from_history
 from ..services.ingest import apply_costs, get_settings
 from ..services.loaded import resolve_slots, set_slots
 from ..services.orca_import import apply_import, plan_import
+from ..services.orders import (
+    HistoryCount,
+    ITEM_FAILED,
+    ITEM_PARTIAL,
+    ITEM_PRINTING,
+    ITEM_QUEUED,
+    LiveMatch,
+    _FINISHED_FAIL as _FINISHED_FAIL_ORDER,
+    _FINISHED_OK as _FINISHED_OK_ORDER,
+    item_status,
+    order_margin,
+    order_status,
+)
 from ..services.sync import sync_all, sync_printer
 
 router = APIRouter(prefix="/api")
@@ -549,6 +566,198 @@ def orca_import(payload: dict = Body(...), db: Session = Depends(get_session)):
 
 
 # --------------------------------------------------------------------------- #
+# Pedidos
+# --------------------------------------------------------------------------- #
+def _history_counts(db: Session) -> dict[tuple[int, str], HistoryCount]:
+    """Recuento de impresiones OK/fallidas por (impresora, gcode).
+
+    Se hace de una vez para todo el tablero, no una consulta por pieza.
+    """
+    counts: dict[tuple[int, str], HistoryCount] = {}
+    rows = db.execute(
+        select(
+            PrintJob.printer_id, PrintJob.filename,
+            PrintJob.status, PrintJob.end_time,
+        ).where(PrintJob.filename.is_not(None))
+    ).all()
+    for pid, fname, status, end in rows:
+        key = (pid, fname)
+        hc = counts.setdefault(key, HistoryCount())
+        if status in _FINISHED_OK_ORDER:
+            hc.ok += 1
+        elif status in _FINISHED_FAIL_ORDER:
+            hc.failed += 1
+        if end and (hc.last_end is None or end > hc.last_end):
+            hc.last_end = end
+    return counts
+
+
+def _compose_folder(base: str, folder: str | None) -> str | None:
+    """Ruta local completa del pedido: <base>/<folder>, respetando el separador.
+
+    Solo texto para mostrar y copiar; el servidor no toca esa carpeta.
+    """
+    if not folder:
+        return None
+    base = (base or "").rstrip("/\\")
+    if not base:
+        return folder
+    sep = "\\" if ("\\" in base and "/" not in base) else "/"
+    return f"{base}{sep}{folder}"
+
+
+def _resolve_order(order: Order, live_by_printer, counts, db: Session, base: str = "") -> dict:
+    """Serializa un pedido con el estado de cada pieza deducido de la realidad."""
+    item_dicts, item_states = [], []
+    total_cost = 0.0
+    for it in order.items:
+        live = live_by_printer.get(it.printer_id)
+        lm = (
+            LiveMatch(printer_id=live["printer_id"], filename=live.get("filename") or "",
+                      progress=live.get("progress") or 0.0, eta_s=live.get("eta_s"))
+            if live else None
+        )
+        hc = counts.get((it.printer_id, it.gcode_filename)) if it.gcode_filename else None
+        st = item_status(
+            printer_id=it.printer_id, gcode_filename=it.gcode_filename,
+            quantity=it.quantity, manual=it.manual_status, live=lm, history=hc,
+        )
+        item_states.append(st)
+        # Coste estimado de la pieza (× cantidad), si hay datos en el historial.
+        unit_cost = None
+        if it.printer_id and it.gcode_filename:
+            printer = db.get(Printer, it.printer_id)
+            if printer:
+                est = estimate_from_history(db, printer, it.gcode_filename)
+                if est.get("has_data"):
+                    unit_cost = est["cost"]["total"]
+                    total_cost += unit_cost * it.quantity
+        item_dicts.append({
+            "id": it.id, "label": it.label, "printer_id": it.printer_id,
+            "printer_name": db.get(Printer, it.printer_id).name if it.printer_id else None,
+            "gcode_filename": it.gcode_filename, "quantity": it.quantity,
+            "manual_status": it.manual_status, "unit_cost": unit_cost,
+            **st.as_dict(),
+        })
+
+    ostatus = order_status(order.manual_status, item_states)
+    return {
+        "id": order.id, "client": order.client, "description": order.description,
+        "payment_status": order.payment_status, "agreed_price": order.agreed_price,
+        "currency": order.currency, "due_date": order.due_date,
+        "manual_status": order.manual_status, "notes": order.notes,
+        "created_at": order.created_at, "status": ostatus,
+        "folder": order.folder,
+        "folder_path": _compose_folder(base, order.folder),
+        "items": item_dicts,
+        "margin": order_margin(total_cost, order.agreed_price),
+    }
+
+
+@router.get("/orders")
+def list_orders(db: Session = Depends(get_session)):
+    """Tablero de pedidos con el estado de impresión deducido de la realidad."""
+    from ..services.live import tracker
+
+    live_by_printer = {s["printer_id"]: s for s in tracker.snapshot()}
+    counts = _history_counts(db)
+    base = _get_setting(db, SETTING_ORDERS_FOLDER_BASE)
+    orders = db.scalars(
+        select(Order).order_by(Order.created_at.desc())
+    ).unique().all()
+    return [_resolve_order(o, live_by_printer, counts, db, base) for o in orders]
+
+
+@router.get("/orders/queue")
+def orders_queue(db: Session = Depends(get_session)):
+    """Piezas pendientes agrupadas por impresora, para saber qué cargar."""
+    from ..services.live import tracker
+
+    live_by_printer = {s["printer_id"]: s for s in tracker.snapshot()}
+    counts = _history_counts(db)
+    queue: dict = {}
+    orders = db.scalars(select(Order)).unique().all()
+    for o in orders:
+        if o.manual_status in ("delivered", "cancelled"):
+            continue
+        for it in o.items:
+            if not it.printer_id:
+                continue
+            live = live_by_printer.get(it.printer_id)
+            lm = LiveMatch(it.printer_id, live.get("filename") or "",
+                           live.get("progress") or 0.0, live.get("eta_s")) if live else None
+            hc = counts.get((it.printer_id, it.gcode_filename)) if it.gcode_filename else None
+            st = item_status(printer_id=it.printer_id, gcode_filename=it.gcode_filename,
+                             quantity=it.quantity, manual=it.manual_status, live=lm, history=hc)
+            if st.status in (ITEM_PRINTING, ITEM_QUEUED, ITEM_PARTIAL, ITEM_FAILED):
+                p = db.get(Printer, it.printer_id)
+                queue.setdefault(it.printer_id, {"printer": p.name if p else "—", "items": []})
+                queue[it.printer_id]["items"].append({
+                    "order_id": o.id, "client": o.client,
+                    "label": it.label or it.gcode_filename, **st.as_dict(),
+                })
+    # Dentro de cada impresora, primero lo que está imprimiendo.
+    rank = {ITEM_PRINTING: 0, ITEM_PARTIAL: 1, ITEM_FAILED: 2, ITEM_QUEUED: 3}
+    for q in queue.values():
+        q["items"].sort(key=lambda i: rank.get(i["status"], 9))
+    return list(queue.values())
+
+
+def _apply_order(order: Order, data: OrderIn, db: Session) -> None:
+    """Vuelca los campos del pedido y reemplaza sus piezas."""
+    order.client = data.client
+    order.description = data.description
+    order.payment_status = data.payment_status
+    order.agreed_price = data.agreed_price
+    order.currency = data.currency or get_settings(db)[1]
+    order.due_date = data.due_date
+    order.manual_status = data.manual_status
+    order.notes = data.notes
+    order.folder = data.folder
+    # Reemplazo completo de piezas: la UI manda la lista entera.
+    order.items.clear()
+    db.flush()
+    for it in data.items:
+        if it.printer_id is not None and not db.get(Printer, it.printer_id):
+            raise HTTPException(404, f"Impresora {it.printer_id} no encontrada")
+        order.items.append(OrderItem(**it.model_dump()))
+
+
+@router.post("/orders", status_code=201)
+def create_order(data: OrderIn, db: Session = Depends(get_session)):
+    order = Order(client=data.client)
+    db.add(order)
+    _apply_order(order, data, db)
+    db.commit()
+    db.refresh(order)
+    from ..services.live import tracker
+    return _resolve_order(order, {s["printer_id"]: s for s in tracker.snapshot()},
+                          _history_counts(db), db, _get_setting(db, SETTING_ORDERS_FOLDER_BASE))
+
+
+@router.put("/orders/{order_id}")
+def update_order(order_id: int, data: OrderIn, db: Session = Depends(get_session)):
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Pedido no encontrado")
+    _apply_order(order, data, db)
+    db.commit()
+    db.refresh(order)
+    from ..services.live import tracker
+    return _resolve_order(order, {s["printer_id"]: s for s in tracker.snapshot()},
+                          _history_counts(db), db, _get_setting(db, SETTING_ORDERS_FOLDER_BASE))
+
+
+@router.delete("/orders/{order_id}", status_code=204)
+def delete_order(order_id: int, db: Session = Depends(get_session)):
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Pedido no encontrado")
+    db.delete(order)   # cascade borra sus piezas
+    db.commit()
+
+
+# --------------------------------------------------------------------------- #
 # Ajustes
 # --------------------------------------------------------------------------- #
 def _get_setting(db: Session, key: str, default: str = "") -> str:
@@ -566,6 +775,7 @@ def _settings_out(db: Session) -> SettingsOut:
         company_info=_get_setting(db, SETTING_COMPANY_INFO),
         payment_info=_get_setting(db, SETTING_PAYMENT_INFO),
         quote_terms=_get_setting(db, SETTING_QUOTE_TERMS),
+        orders_folder_base=_get_setting(db, SETTING_ORDERS_FOLDER_BASE),
     )
 
 
@@ -598,6 +808,8 @@ def update_settings(data: SettingsIn, db: Session = Depends(get_session)):
         _set_setting(db, SETTING_PAYMENT_INFO, data.payment_info)
     if data.quote_terms is not None:
         _set_setting(db, SETTING_QUOTE_TERMS, data.quote_terms)
+    if data.orders_folder_base is not None:
+        _set_setting(db, SETTING_ORDERS_FOLDER_BASE, data.orders_folder_base)
     db.commit()
     return _settings_out(db)
 

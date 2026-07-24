@@ -119,6 +119,7 @@ class SettingsOut(BaseModel):
     company_info: str = ""
     payment_info: str = ""
     quote_terms: str = ""
+    orders_folder_base: str = ""
 
 
 class SettingsIn(BaseModel):
@@ -129,6 +130,7 @@ class SettingsIn(BaseModel):
     company_info: str | None = None
     payment_info: str | None = None
     quote_terms: str | None = None
+    orders_folder_base: str | None = None
 
     @field_validator("company_logo")
     @classmethod
@@ -140,6 +142,59 @@ class SettingsIn(BaseModel):
 
 class AssignMaterialIn(BaseModel):
     material_id: int | None
+
+
+class OrderItemIn(BaseModel):
+    label: str | None = None
+    printer_id: int | None = None
+    gcode_filename: str | None = None
+    quantity: int = 1
+    manual_status: str | None = None
+
+    @field_validator("quantity")
+    @classmethod
+    def _qty(cls, v: int) -> int:
+        return max(1, v)
+
+    @field_validator("manual_status")
+    @classmethod
+    def _item_manual(cls, v: str | None) -> str | None:
+        from .models import ITEM_MANUAL
+
+        if v and v not in ITEM_MANUAL:
+            raise ValueError(f"Estado de pieza inválido: {v}")
+        return v or None
+
+
+class OrderIn(BaseModel):
+    client: str
+    description: str | None = None
+    payment_status: str = "pending"
+    agreed_price: float | None = None
+    currency: str | None = None
+    due_date: datetime | None = None
+    manual_status: str | None = None
+    notes: str | None = None
+    folder: str | None = None
+    items: list[OrderItemIn] = []
+
+    @field_validator("payment_status")
+    @classmethod
+    def _pay(cls, v: str) -> str:
+        from .models import PAYMENT_STATES
+
+        if v not in PAYMENT_STATES:
+            raise ValueError(f"Estado de pago inválido: {v}")
+        return v
+
+    @field_validator("manual_status")
+    @classmethod
+    def _order_manual(cls, v: str | None) -> str | None:
+        from .models import ORDER_MANUAL
+
+        if v and v not in ORDER_MANUAL:
+            raise ValueError(f"Estado de pedido inválido: {v}")
+        return v or None
 
 
 class StatsOut(BaseModel):

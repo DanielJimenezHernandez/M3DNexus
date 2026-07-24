@@ -264,6 +264,70 @@ PHOTO_LIMITS = {PHOTO_SPOOL: 2, PHOTO_COLOR: 1}
 PHOTO_MAX_BYTES = 3 * 1024 * 1024
 
 
+class Order(Base):
+    """Pedido de un cliente, con una o varias piezas (líneas).
+
+    El estado de impresión NO se guarda: se deduce cruzando cada línea con el
+    seguimiento en vivo y el historial. Solo se guarda ``manual_status`` para lo
+    que la máquina no puede saber (entregado, cancelado, en espera).
+    """
+
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client: Mapped[str] = mapped_column(String)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    payment_status: Mapped[str] = mapped_column(String, default="pending")  # pending|deposit|paid
+    agreed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String, default="€")
+    due_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Estado puesto a mano que gana sobre el deducido; null = automático.
+    manual_status: Mapped[str | None] = mapped_column(String, nullable=True)  # delivered|cancelled|on_hold
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Nombre de la carpeta local del pedido dentro de la carpeta base (p.ej.
+    # "01", "112"), donde viven los STL/3MF/gcode de origen. Solo referencia:
+    # el servidor no accede a esa carpeta, vive en el equipo del usuario.
+    folder: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    items: Mapped[list["OrderItem"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )
+
+
+class OrderItem(Base):
+    """Una pieza del pedido: un gcode a imprimir en una impresora, N veces."""
+
+    __tablename__ = "order_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
+    label: Mapped[str | None] = mapped_column(String, nullable=True)
+    printer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printers.id"), nullable=True
+    )
+    # Gcode ligado a la pieza; se cruza con lo que imprime la máquina.
+    gcode_filename: Mapped[str | None] = mapped_column(String, nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    # Override manual por pieza (done|failed); null = deducido de la realidad.
+    manual_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    order: Mapped["Order"] = relationship(back_populates="items")
+    printer: Mapped["Printer | None"] = relationship()
+
+
+# Estados de pago del pedido.
+PAY_PENDING = "pending"
+PAY_DEPOSIT = "deposit"
+PAY_PAID = "paid"
+PAYMENT_STATES = {PAY_PENDING, PAY_DEPOSIT, PAY_PAID}
+
+# Overrides manuales.
+ORDER_MANUAL = {"delivered", "cancelled", "on_hold"}
+ITEM_MANUAL = {"done", "failed"}
+
+
 class Setting(Base):
     """Ajustes globales editables desde la UI (clave/valor)."""
 
@@ -288,3 +352,6 @@ SETTING_COMPANY_LOGO = "company_logo"
 SETTING_COMPANY_INFO = "company_info"
 SETTING_PAYMENT_INFO = "payment_info"
 SETTING_QUOTE_TERMS = "quote_terms"
+# Ruta base de la carpeta local "Pedidos" (en el equipo del usuario). Cada
+# pedido cuelga de <base>/<folder>. Solo se guarda como texto para componerla.
+SETTING_ORDERS_FOLDER_BASE = "orders_folder_base"

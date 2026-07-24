@@ -224,3 +224,22 @@ td a:hover { text-decoration: underline; }
 .inline-check { display: flex; align-items: center; gap: 0.5rem; margin: 0.3rem 0 0.7rem;
   font-size: 0.85rem; }
 .inline-check input { width: auto; }
+
+/* Pedidos */
+.order-card { margin-bottom: 0.8rem; }
+.order-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.order-desc { margin: 0.3rem 0; font-size: 0.85rem; }
+.order-items { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.order-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;
+  padding: 0.3rem 0.5rem; background: var(--panel-2); border-radius: 8px; }
+.oi-name { font-weight: 600; }
+.progress.mini { height: 14px; width: 120px; margin: 0; }
+.progress.mini span { font-size: 0.7rem; line-height: 14px; }
+.oi-editor { margin-bottom: 0.6rem; background: var(--panel-2); }
+.due { font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 999px; }
+.due-over { background: rgba(255,107,107,.2); color: var(--danger); font-weight: 600; }
+.due-today { background: rgba(255,180,84,.2); color: var(--warn); font-weight: 600; }
+.due-soon { background: rgba(79,140,255,.15); color: var(--accent); }
+.queue-items { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.order-folder { display: flex; align-items: center; gap: 0.5rem; margin: 0.3rem 0; font-size: 0.82rem; }
+.order-folder code { background: var(--panel-2); padding: 0.15rem 0.4rem; border-radius: 6px; }

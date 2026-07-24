@@ -4,13 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — coste de impresiones 3D</title>
-  <link rel="stylesheet" href="/style.css?v=26" />
+  <link rel="stylesheet" href="/style.css?v=28" />
 </head>
 <body>
   <header>
     <h1>M3D <span>Nexus</span></h1>
     <nav>
       <button data-tab="dashboard" class="active">Dashboard</button>
+      <button data-tab="pedidos">Pedidos</button>
       <button data-tab="jobs">Impresiones</button>
       <button data-tab="printers">Impresoras</button>
       <button data-tab="materials">Materiales</button>
@@ -93,6 +94,27 @@
       </div>
       <table id="materials-table"></table>
       <div id="material-form-host"></div>
+    </section>
+
+    <!-- Pedidos -->
+    <section id="pedidos" class="tab">
+      <div class="toolbar">
+        <h2 style="margin:0">Pedidos</h2>
+        <select id="ped-filter">
+          <option value="open">Abiertos</option>
+          <option value="all">Todos</option>
+          <option value="printing">Imprimiendo</option>
+          <option value="printed">Listos para entregar</option>
+          <option value="delivered">Entregados</option>
+        </select>
+        <input type="search" id="ped-search" placeholder="Cliente o descripción…" />
+        <span class="spacer"></span>
+        <button class="btn ghost small" id="ped-queue-toggle">Ver cola por impresora</button>
+        <button class="btn" id="add-order">+ Nuevo pedido</button>
+      </div>
+      <div id="ped-queue" hidden></div>
+      <div id="order-form-host"></div>
+      <div id="orders-board"></div>
     </section>
 
     <!-- Calibración de filamentos por impresora -->
@@ -235,11 +257,20 @@
         <label class="field"><span>Términos y condiciones</span>
           <textarea id="set-quote-terms" rows="5"></textarea></label>
       </div>
+
+      <h2>Pedidos</h2>
+      <div class="card" style="max-width:560px">
+        <label class="field"><span>Carpeta local de pedidos (ruta base)</span>
+          <input type="text" id="set-orders-folder" placeholder="D:\3D\Pedidos  ó  /home/dani/Pedidos" /></label>
+        <p class="muted" style="font-size:.78rem;margin:.2rem 0 0">Cada pedido cuelga de esta ruta
+          por su número de carpeta (p.ej. <code>…\Pedidos\112</code>). Es solo una referencia para
+          encontrar tus STL/3MF localmente; el servidor no accede a esa carpeta.</p>
+      </div>
       <button class="btn" id="save-settings">Guardar</button>
     </section>
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=26"></script>
+  <script src="/app.js?v=28"></script>
 </body>
 </html>

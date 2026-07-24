@@ -68,9 +68,9 @@ document.querySelectorAll("nav button").forEach((b) => {
 });
 
 function loadTab(name) {
-  ({ dashboard: loadDashboard, jobs: loadJobs, printers: loadPrinters,
-     materials: loadMaterials, calibracion: loadCalibracion, quote: loadQuote,
-     cotizacion: loadCotizacion, settings: loadSettings })[name]?.();
+  ({ dashboard: loadDashboard, pedidos: loadPedidos, jobs: loadJobs,
+     printers: loadPrinters, materials: loadMaterials, calibracion: loadCalibracion,
+     quote: loadQuote, cotizacion: loadCotizacion, settings: loadSettings })[name]?.();
 }
 
 // --- Dashboard ---------------------------------------------------------------
@@ -913,6 +913,273 @@ document.getElementById("q-print").addEventListener("click", () => {
     <div class="foot">${escHtml(s.company_name || "M3D Nexus")} — Transforma tus ideas en realidad con impresión 3D</div>
   `);
 });
+
+// --- Pedidos -----------------------------------------------------------------
+// El estado de impresión lo deduce el servidor cruzando cada gcode con lo que
+// imprime la máquina; aquí solo se pinta y se refresca en vivo.
+
+const ORDER_STATUS = {
+  draft:     ["Borrador", "var(--muted)"],
+  queued:    ["En cola", "var(--accent)"],
+  printing:  ["Imprimiendo", "var(--good)"],
+  partial:   ["Parcial", "var(--warn)"],
+  printed:   ["Listo", "var(--good)"],
+  delivered: ["Entregado", "var(--muted)"],
+  cancelled: ["Cancelado", "var(--danger)"],
+  on_hold:   ["En espera", "var(--warn)"],
+};
+const ITEM_STATUS = {
+  unassigned: ["sin asignar", "var(--muted)"],
+  queued:     ["en cola", "var(--accent)"],
+  printing:   ["imprimiendo", "var(--good)"],
+  partial:    ["parcial", "var(--warn)"],
+  printed:    ["impreso", "var(--good)"],
+  failed:     ["fallido", "var(--danger)"],
+  done:       ["hecho", "var(--good)"],
+};
+const PAY_STATUS = { pending: "Pendiente", deposit: "Anticipo", paid: "Completo" };
+const DUE_RANK = { "vencido": 0, "vence hoy": 1, "mañana": 2 };
+
+let orders = [];
+
+function statusPill(map, key) {
+  const [txt, col] = map[key] || ["—", "var(--muted)"];
+  return `<span class="pill" style="background:${col}22;color:${col}">${txt}</span>`;
+}
+
+function dueLabel(due) {
+  if (!due) return "";
+  const days = Math.ceil((new Date(due) - new Date()) / 86400000);
+  if (days < 0) return `<span class="due due-over">vencido ${-days}d</span>`;
+  if (days === 0) return `<span class="due due-today">vence hoy</span>`;
+  if (days === 1) return `<span class="due due-soon">mañana</span>`;
+  if (days <= 3) return `<span class="due due-soon">en ${days} días</span>`;
+  return `<span class="due muted">en ${days} días</span>`;
+}
+const dueSort = (o) => o.due_date ? new Date(o.due_date).getTime() : 8.64e15;
+
+async function loadPedidos() {
+  await ensureRefs();
+  orders = await api.get("/api/orders");
+  renderOrders();
+}
+
+function renderOrders() {
+  const filter = document.getElementById("ped-filter").value;
+  const q = (document.getElementById("ped-search").value || "").toLowerCase();
+  const open = (s) => !["delivered", "cancelled"].includes(s);
+  let rows = orders.filter((o) => {
+    if (filter === "open" && !open(o.status)) return false;
+    if (filter === "printing" && o.status !== "printing") return false;
+    if (filter === "printed" && o.status !== "printed") return false;
+    if (filter === "delivered" && o.status !== "delivered") return false;
+    return !q || `${o.client} ${o.description || ""}`.toLowerCase().includes(q);
+  });
+  // Urgencia primero: vencidos y próximos arriba.
+  rows.sort((a, b) => dueSort(a) - dueSort(b));
+
+  const host = document.getElementById("orders-board");
+  if (!rows.length) { host.innerHTML = `<p class="muted">Sin pedidos.</p>`; return; }
+
+  host.innerHTML = rows.map((o) => {
+    const cur = o.currency || currency;
+    const items = o.items.map((it) => {
+      const prog = it.status === "printing" && it.progress != null
+        ? `<div class="progress mini"><div class="bar" style="width:${Math.round(it.progress * 100)}%"></div><span>${Math.round(it.progress * 100)}%</span></div>` : "";
+      const copies = it.quantity > 1 ? ` <span class="muted">${it.printed}/${it.quantity}</span>` : "";
+      return `<div class="order-item">
+        <span class="oi-name" title="${escHtml(it.gcode_filename || "")}">${escHtml(it.label || (it.gcode_filename || "sin gcode").split("/").pop())}</span>
+        <span class="muted">${escHtml(it.printer_name || "—")}</span>
+        ${statusPill(ITEM_STATUS, it.status)}${copies}
+        ${prog}
+      </div>`;
+    }).join("");
+
+    const margin = o.margin
+      ? `<span class="muted" title="coste estimado ${money2(o.margin.cost, cur)}">margen ${money2(o.margin.profit, cur)} (${o.margin.margin_pct}%)</span>`
+      : (o.agreed_price != null ? `<span class="muted">precio ${money2(o.agreed_price, cur)}</span>` : "");
+
+    return `<div class="card order-card">
+      <div class="order-head">
+        <strong>#${o.id} · ${escHtml(o.client)}</strong>
+        ${statusPill(ORDER_STATUS, o.status)}
+        <span class="pill" style="background:var(--panel-2)">${PAY_STATUS[o.payment_status] || o.payment_status}</span>
+        ${dueLabel(o.due_date)}
+        <span class="spacer"></span>
+        ${margin}
+        <button class="btn ghost small" data-edit-order="${o.id}">Editar</button>
+        <button class="btn danger small" data-del-order="${o.id}">✕</button>
+      </div>
+      ${o.description ? `<div class="muted order-desc">${escHtml(o.description)}</div>` : ""}
+      ${o.folder_path ? `<div class="order-folder muted">📁 <code>${escHtml(o.folder_path)}</code>
+        <button class="btn ghost small" data-copy-path="${escHtml(o.folder_path)}" title="Copiar ruta">Copiar</button></div>`
+        : (o.folder ? `<div class="order-folder muted">📁 carpeta ${escHtml(o.folder)} <span class="muted">(pon la ruta base en Ajustes)</span></div>` : "")}
+      <div class="order-items">${items || '<span class="muted">Sin piezas</span>'}</div>
+    </div>`;
+  }).join("");
+
+  host.querySelectorAll("[data-copy-path]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(b.dataset.copyPath); toast("Ruta copiada"); }
+      catch { toast("No se pudo copiar"); }
+    }));
+
+  host.querySelectorAll("[data-edit-order]").forEach((b) =>
+    b.addEventListener("click", () => orderForm(orders.find((o) => o.id == b.dataset.editOrder))));
+  host.querySelectorAll("[data-del-order]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (!confirm("¿Borrar pedido?")) return;
+      await api.send(`/api/orders/${b.dataset.delOrder}`, "DELETE"); loadPedidos();
+    }));
+}
+
+function money2(v, cur) { return `${(v ?? 0).toFixed(2)} ${cur || currency}`; }
+
+// --- Formulario de pedido con editor de piezas -------------------------------
+function orderForm(o = {}) {
+  const host = document.getElementById("order-form-host");
+  const pay = o.payment_status || "pending";
+  const oms = o.manual_status || "";
+  const due = o.due_date ? new Date(o.due_date).toISOString().slice(0, 10) : "";
+
+  host.innerHTML = `<div class="card" style="margin-top:1rem">
+    <h2 style="margin-top:0">${o.id ? "Editar" : "Nuevo"} pedido ${o.id ? "#" + o.id : ""}</h2>
+    <div class="form-grid">
+      <label class="field"><span>Cliente</span><input id="of-client" value="${escHtml(o.client || "")}"></label>
+      <label class="field"><span>Descripción</span><input id="of-desc" value="${escHtml(o.description || "")}"></label>
+      <label class="field"><span>Estado de pago</span><select id="of-pay">
+        ${Object.entries(PAY_STATUS).map(([k, v]) => `<option value="${k}" ${k === pay ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <label class="field"><span>Precio acordado</span><input type="number" step="0.01" id="of-price" value="${o.agreed_price ?? ""}"></label>
+      <label class="field"><span>Fecha de entrega</span><input type="date" id="of-due" value="${due}"></label>
+      <label class="field"><span>Carpeta local (nº)</span><input id="of-folder" placeholder="${o.id || "p.ej. 112"}" value="${escHtml(o.folder || "")}"></label>
+      <label class="field"><span>Estado manual</span><select id="of-manual">
+        <option value="">— automático —</option>
+        <option value="on_hold" ${oms === "on_hold" ? "selected" : ""}>En espera</option>
+        <option value="delivered" ${oms === "delivered" ? "selected" : ""}>Entregado</option>
+        <option value="cancelled" ${oms === "cancelled" ? "selected" : ""}>Cancelado</option>
+      </select></label>
+    </div>
+    <div class="toolbar" style="margin:.4rem 0"><strong>Piezas</strong>
+      <span class="spacer"></span>
+      <button class="btn ghost small" id="of-add-item">+ Añadir pieza</button></div>
+    <div id="of-items"></div>
+    <div class="row-actions" style="margin-top:1rem">
+      <button class="btn" id="of-save">Guardar</button>
+      <button class="btn ghost" id="of-cancel">Cancelar</button></div>
+  </div>`;
+
+  const itemsHost = host.querySelector("#of-items");
+  (o.items && o.items.length ? o.items : [{}]).forEach((it) => addOrderItem(itemsHost, it));
+
+  host.querySelector("#of-add-item").onclick = () => addOrderItem(itemsHost, {});
+  host.querySelector("#of-cancel").onclick = () => (host.innerHTML = "");
+  host.querySelector("#of-save").onclick = () => saveOrder(o.id, host);
+  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function addOrderItem(host, it) {
+  const row = el(`<div class="card oi-editor">
+    <div class="form-grid">
+      <label class="field"><span>Etiqueta (opcional)</span><input class="oi-label" value="${escHtml(it.label || "")}"></label>
+      <label class="field"><span>Impresora</span><select class="oi-printer">
+        <option value="">— elegir —</option>
+        ${printers.map((p) => `<option value="${p.id}" ${p.id === it.printer_id ? "selected" : ""}>${escHtml(p.name)}</option>`).join("")}
+      </select></label>
+      <label class="field"><span>Gcode en la impresora</span><select class="oi-gcode"><option value="">— elige impresora —</option></select></label>
+      <label class="field"><span>Cantidad</span><input type="number" min="1" class="oi-qty" value="${it.quantity || 1}"></label>
+    </div>
+    <div class="row-actions"><span class="oi-status muted"></span><span class="spacer"></span>
+      <button type="button" class="btn ghost small oi-remove">Quitar pieza</button></div>
+  </div>`);
+  host.appendChild(row);
+
+  const printerSel = row.querySelector(".oi-printer");
+  const gcodeSel = row.querySelector(".oi-gcode");
+  row._current = it.gcode_filename || "";
+  printerSel.addEventListener("change", () => loadOrderGcodes(row));
+  if (it.printer_id) loadOrderGcodes(row);
+  row.querySelector(".oi-remove").onclick = () => {
+    if (host.children.length > 1) row.remove();
+    else toast("Un pedido necesita al menos una pieza");
+  };
+}
+
+// Buscador de gcode de la impresora elegida (en vivo, con fallback al historial).
+async function loadOrderGcodes(row) {
+  const pid = row.querySelector(".oi-printer").value;
+  const sel = row.querySelector(".oi-gcode");
+  const status = row.querySelector(".oi-status");
+  if (!pid) { sel.innerHTML = `<option value="">— elige impresora —</option>`; return; }
+  sel.innerHTML = `<option value="">cargando…</option>`;
+  const list = async (url) => { const r = await api.get(url); return Array.isArray(r) ? r : null; };
+  let files = await list(`/api/printers/${pid}/files`);
+  let src = "impresora";
+  if (!files || !files.length) {
+    const hist = await list(`/api/printers/${pid}/history-files`);
+    if (hist && hist.length) { files = hist; src = "historial"; }
+  }
+  const cur = row._current;
+  sel.innerHTML = `<option value="">— elige gcode —</option>` +
+    (files || []).map((f) => `<option value="${escHtml(f.path)}" ${f.path === cur ? "selected" : ""}>${escHtml(f.path)}</option>`).join("");
+  if (cur && !(files || []).some((f) => f.path === cur)) {
+    // El gcode ligado ya no está en la impresora: se conserva igualmente.
+    sel.innerHTML += `<option value="${escHtml(cur)}" selected>${escHtml(cur)} (ya no está en la impresora)</option>`;
+  }
+  status.textContent = files && files.length
+    ? `${files.length} gcodes (${src})`
+    : "impresora apagada y sin historial";
+}
+
+async function saveOrder(id, host) {
+  const items = [...host.querySelectorAll(".oi-editor")].map((row) => ({
+    label: row.querySelector(".oi-label").value || null,
+    printer_id: row.querySelector(".oi-printer").value ? +row.querySelector(".oi-printer").value : null,
+    gcode_filename: row.querySelector(".oi-gcode").value || null,
+    quantity: Math.max(1, parseInt(row.querySelector(".oi-qty").value) || 1),
+  }));
+  const client = host.querySelector("#of-client").value.trim();
+  if (!client) { toast("El pedido necesita un cliente"); return; }
+  const due = host.querySelector("#of-due").value;
+  const price = host.querySelector("#of-price").value;
+  const body = {
+    client,
+    description: host.querySelector("#of-desc").value || null,
+    payment_status: host.querySelector("#of-pay").value,
+    agreed_price: price ? parseFloat(price) : null,
+    due_date: due ? new Date(due).toISOString() : null,
+    manual_status: host.querySelector("#of-manual").value || null,
+    folder: host.querySelector("#of-folder").value.trim() || null,
+    items,
+  };
+  try {
+    await api.send(id ? `/api/orders/${id}` : "/api/orders", id ? "PUT" : "POST", body);
+    host.innerHTML = ""; toast("Pedido guardado"); loadPedidos();
+  } catch (e) { toast("Error: " + e.message); }
+}
+
+// --- Cola por impresora ------------------------------------------------------
+async function toggleQueue() {
+  const host = document.getElementById("ped-queue");
+  if (!host.hidden) { host.hidden = true; return; }
+  const q = await api.get("/api/orders/queue");
+  host.innerHTML = q.length
+    ? `<div class="cards">` + q.map((col) => `<div class="card">
+        <strong>${escHtml(col.printer)}</strong>
+        <div class="queue-items">${col.items.map((i) =>
+          `<div class="order-item">${statusPill(ITEM_STATUS, i.status)}
+            <span>#${i.order_id} ${escHtml(i.label || "")}</span>
+            <span class="muted">${escHtml(i.client)}</span></div>`).join("")}</div>
+      </div>`).join("") + `</div>`
+    : `<p class="muted">Nada en cola.</p>`;
+  host.hidden = false;
+}
+
+document.getElementById("add-order").addEventListener("click", () => orderForm());
+document.getElementById("ped-filter").addEventListener("change", renderOrders);
+document.getElementById("ped-search").addEventListener("input", renderOrders);
+document.getElementById("ped-queue-toggle").addEventListener("click", toggleQueue);
+// Refresco en vivo del tablero mientras se mira (mismo ritmo que el dashboard).
+setInterval(() => { if (currentTab === "pedidos" && !document.getElementById("order-form-host").innerHTML) loadPedidos(); }, 8000);
 
 // --- Calibración de filamentos ----------------------------------------------
 // Matriz de qué filamento está afinado en qué impresora, y el import desde los
@@ -1896,6 +2163,7 @@ async function loadSettings() {
   document.getElementById("set-company-info").value = s.company_info || "";
   document.getElementById("set-payment-info").value = s.payment_info || "";
   document.getElementById("set-quote-terms").value = s.quote_terms || "";
+  document.getElementById("set-orders-folder").value = s.orders_folder_base || "";
   showLogo(s.company_logo || "");
 }
 
@@ -1941,6 +2209,7 @@ document.getElementById("save-settings").addEventListener("click", async () => {
       company_info: document.getElementById("set-company-info").value,
       payment_info: document.getElementById("set-payment-info").value,
       quote_terms: document.getElementById("set-quote-terms").value,
+      orders_folder_base: document.getElementById("set-orders-folder").value,
     });
     currency = appSettings.currency;
     toast("Ajustes guardados");

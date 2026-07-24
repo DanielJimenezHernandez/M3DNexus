@@ -243,3 +243,6 @@ td a:hover { text-decoration: underline; }
 .queue-items { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }
 .order-folder { display: flex; align-items: center; gap: 0.5rem; margin: 0.3rem 0; font-size: 0.82rem; }
 .order-folder code { background: var(--panel-2); padding: 0.15rem 0.4rem; border-radius: 6px; }
+.oi-names { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+.oi-gcode { font-size: 0.75rem; }
+.oi-eta { font-variant-numeric: tabular-nums; }

@@ -984,13 +984,29 @@ function renderOrders() {
   host.innerHTML = rows.map((o) => {
     const cur = o.currency || currency;
     const items = o.items.map((it) => {
-      const prog = it.status === "printing" && it.progress != null
+      const printing = it.status === "printing";
+      const prog = printing && it.progress != null
         ? `<div class="progress mini"><div class="bar" style="width:${Math.round(it.progress * 100)}%"></div><span>${Math.round(it.progress * 100)}%</span></div>` : "";
+      const eta = printing && it.eta_s != null
+        ? `<span class="muted oi-eta" title="tiempo restante estimado">⏳ ${fmtEta(it.eta_s)}</span>` : "";
       const copies = it.quantity > 1 ? ` <span class="muted">${it.printed}/${it.quantity}</span>` : "";
+      // El nombre del gcode que se imprime; la etiqueta (si hay) va encima.
+      const gname = (it.gcode_filename || "").split("/").pop();
+      const name = it.label
+        ? `<span class="oi-name">${escHtml(it.label)}</span><span class="muted oi-gcode" title="${escHtml(it.gcode_filename || "")}">${escHtml(gname || "sin gcode")}</span>`
+        : `<span class="oi-name" title="${escHtml(it.gcode_filename || "")}">${escHtml(gname || "sin gcode")}</span>`;
+      // Nombre de impresora como enlace a su interfaz Klipper.
+      const pr = printers.find((p) => p.id === it.printer_id);
+      const ku = pr && klipperUrl(pr);
+      const printer = it.printer_name
+        ? (ku ? `<a class="muted" href="${ku}" target="_blank" rel="noopener" title="Abrir ${escHtml(pr.name)}">${escHtml(it.printer_name)} ↗</a>`
+              : `<span class="muted">${escHtml(it.printer_name)}</span>`)
+        : `<span class="muted">—</span>`;
       return `<div class="order-item">
-        <span class="oi-name" title="${escHtml(it.gcode_filename || "")}">${escHtml(it.label || (it.gcode_filename || "sin gcode").split("/").pop())}</span>
-        <span class="muted">${escHtml(it.printer_name || "—")}</span>
+        <span class="oi-names">${name}</span>
+        ${printer}
         ${statusPill(ITEM_STATUS, it.status)}${copies}
+        ${eta}
         ${prog}
       </div>`;
     }).join("");

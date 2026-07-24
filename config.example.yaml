@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Configuración de printcost. Copia a config.yaml y ajústalo.
+#
+# Las claves de infraestructura (ha_url, ha_token, db_path...) se leen en cada
+# arranque y pueden sobreescribirse por variables de entorno (HA_URL, HA_TOKEN,
+# DB_PATH, POLL_INTERVAL_SECONDS).
+#
+# La sección `bootstrap` solo se usa para SEMBRAR la base de datos en el primer
+# arranque. Después, edita impresoras / materiales / precio desde la web.
+# ─────────────────────────────────────────────────────────────────────────
+
+# --- Home Assistant ---------------------------------------------------------
+ha_url: "http://192.168.1.10:8123"   # usa la IP de HA; .local NO resuelve desde Docker
+# Token de acceso de larga duración. Crea uno en HA:
+#   tu perfil → Tokens de acceso de larga duración → Crear token.
+# Recomendado: ponerlo en la variable de entorno HA_TOKEN, no aquí.
+ha_token: ""
+
+# --- App --------------------------------------------------------------------
+db_path: "/data/printcost.db"
+poll_interval_seconds: 60
+# Margen (s) añadido antes/después de cada impresión al medir energía.
+# Útil si quieres incluir el precalentamiento. 0 = ventana exacta del job.
+energy_window_padding_seconds: 0
+# Días de historial detallado que guarda el recorder de HA (su `purge_keep_days`).
+# No se pide energía de impresiones más antiguas: HA ya la purgó y sería una
+# llamada perdida en cada sondeo. Súbelo si has ampliado la retención en HA.
+ha_history_retention_days: 10
+
+# --- Seed inicial (solo primer arranque) ------------------------------------
+bootstrap:
+  electricity_price_per_kwh: 3   # tu tarifa plana, en tu moneda por kWh
+  currency: "$"
+
+  printers:
+    - name: "Creality Hi"
+      host: "192.168.0.154"        # IP o hostname de la impresora
+      moonraker_port: 7125         # puerto de la API Moonraker (7125 por defecto)
+      ui_port: 80                  # puerto de la interfaz Klipper (Mainsail/Fluidd)
+      # Entidad de HA con la energía ACUMULADA (kWh) del POW3 de esta impresora.
+      # Tasmota suele exponer algo como: sensor.voron_energy_total
+      # Sonoff firmware original (vía integración Sonoff/SonoffLAN):
+      #   sensor.voron_pow_energy  (verifica el nombre real en HA)
+      ha_energy_entity: "sensor.energy_creality_hi_total"
+      ha_power_entity: "sensor.energy_creality_hi_power"   # opcional (potencia instantánea)
+      # Amortización: coste/h = precio / (años × días/año × horas/día)
+      purchase_price: 24000.0
+      amortization_years: 2
+      active_days_per_year: 250
+      active_hours_per_day: 8
+
+    # - name: "Ender 3 V2"
+    #   host: "192.168.1.51"
+    #   moonraker_port: 7125
+    #   ha_energy_entity: "sensor.ender3_energy_total"
+    #   purchase_price: 5000.0
+    #   amortization_years: 2
+    #   active_days_per_year: 250
+    #   active_hours_per_day: 8
+
+  materials:
+    - name: "PLA genérico"
+      material_type: "PLA"
+      price_per_kg: 300
+      density_g_cm3: 1.24
+    - name: "PETG genérico"
+      material_type: "PETG"
+      price_per_kg: 400
+      density_g_cm3: 1.27
+    - name: "ABS genérico"
+      material_type: "ABS"
+      price_per_kg: 300
+      density_g_cm3: 1.04

@@ -1,0 +1,16 @@
+services:
+  printcost:
+    build: .
+    container_name: printcost
+    ports:
+      - "8088:8000"        # http://<host>:8088
+    volumes:
+      - ./data:/data                       # persistencia de la BD
+      - ./config.yaml:/app/config.yaml:ro  # config + seed inicial
+    environment:
+      # El token de HA mejor por entorno (no en el YAML versionado).
+      # Crea un fichero .env junto a este compose con HA_TOKEN=...
+      HA_TOKEN: ${HA_TOKEN:-}
+      # Descomenta para sobreescribir lo del YAML:
+      # HA_URL: http://homeassistant.local:8123
+    restart: unless-stopped

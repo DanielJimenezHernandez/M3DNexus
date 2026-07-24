@@ -1,0 +1,146 @@
+"""Configuración de SQLAlchemy: engine, sesión y Base declarativa."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+from .config import get_config
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+_config = get_config()
+_engine = create_engine(
+    f"sqlite:///{_config.db_path}",
+    # SQLite + acceso desde el hilo de polling y desde FastAPI.
+    connect_args={"check_same_thread": False},
+    future=True,
+)
+SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
+
+
+def init_db() -> None:
+    """Crea las tablas si no existen y aplica migraciones ligeras."""
+    from . import models  # noqa: F401  (registra los modelos en Base.metadata)
+
+    Base.metadata.create_all(_engine)
+    _migrate()
+
+
+def _migrate() -> None:
+    """Añade columnas nuevas a tablas ya creadas (SQLite no lo hace solo)."""
+    additions = {
+        "materials": {
+            "color": "ALTER TABLE materials ADD COLUMN color VARCHAR",
+            "color_hex": "ALTER TABLE materials ADD COLUMN color_hex VARCHAR",
+            "stock_level": "ALTER TABLE materials ADD COLUMN stock_level VARCHAR DEFAULT 'unknown'",
+            "purchase_url": "ALTER TABLE materials ADD COLUMN purchase_url VARCHAR",
+            "auto_created": "ALTER TABLE materials ADD COLUMN auto_created BOOLEAN DEFAULT 0",
+        },
+        "print_jobs": {
+            "energy_unavailable": "ALTER TABLE print_jobs ADD COLUMN energy_unavailable BOOLEAN DEFAULT 0",
+        },
+        "printers": {
+            "orca_aliases": "ALTER TABLE printers ADD COLUMN orca_aliases JSON",
+            "multicolor": "ALTER TABLE printers ADD COLUMN multicolor BOOLEAN DEFAULT 0",
+            "slot_count": "ALTER TABLE printers ADD COLUMN slot_count INTEGER DEFAULT 1",
+            "loaded_materials": "ALTER TABLE printers ADD COLUMN loaded_materials JSON",
+            "amortization_years": "ALTER TABLE printers ADD COLUMN amortization_years FLOAT DEFAULT 2",
+            "active_days_per_year": "ALTER TABLE printers ADD COLUMN active_days_per_year FLOAT DEFAULT 250",
+            "active_hours_per_day": "ALTER TABLE printers ADD COLUMN active_hours_per_day FLOAT DEFAULT 8",
+            "ui_port": "ALTER TABLE printers ADD COLUMN ui_port INTEGER DEFAULT 80",
+            "host": "ALTER TABLE printers ADD COLUMN host VARCHAR DEFAULT ''",
+            "moonraker_port": "ALTER TABLE printers ADD COLUMN moonraker_port INTEGER DEFAULT 7125",
+        },
+    }
+    with _engine.begin() as conn:
+        added: set[str] = set()
+        for table, cols in additions.items():
+            existing = {
+                row[1]
+                for row in conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            }
+            for col, ddl in cols.items():
+                if col not in existing:
+                    conn.exec_driver_sql(ddl)
+                    added.add(col)
+
+        # Migra y elimina la columna antigua 'moonraker_url': su NOT NULL rompía
+        # los INSERT nuevos (el modelo ya no la rellena). Idempotente.
+        pcols = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(printers)").fetchall()
+        }
+        if "moonraker_url" in pcols and "host" in pcols:
+            from urllib.parse import urlparse
+
+            for pid, murl, host in conn.exec_driver_sql(
+                "SELECT id, moonraker_url, host FROM printers"
+            ).fetchall():
+                if (not host) and murl:
+                    u = urlparse(murl)
+                    conn.exec_driver_sql(
+                        "UPDATE printers SET host = ?, moonraker_port = ? WHERE id = ?",
+                        (u.hostname or "", u.port or 7125, pid),
+                    )
+            conn.exec_driver_sql("ALTER TABLE printers DROP COLUMN moonraker_url")
+
+        # Elimina columnas muertas (quitadas del modelo) que conservan NOT NULL
+        # y, por tanto, rompen los INSERT nuevos. Idempotente.
+        removals = {
+            "printers": ["expected_lifetime_hours", "maintenance_cost_per_hour"],
+            "print_jobs": ["cost_maintenance"],
+        }
+        for table, drop_cols in removals.items():
+            existing = {
+                row[1]
+                for row in conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            }
+            for col in drop_cols:
+                if col in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN {col}")
+
+        # Backfill: si acabamos de crear la amortización, derivamos los años
+        # desde la antigua 'expected_lifetime_hours' para no cambiar el coste/h
+        # (años = horas_vida / (250 días × 8 h)). Solo una vez.
+        if "amortization_years" in added:
+            cols = {
+                row[1]
+                for row in conn.exec_driver_sql("PRAGMA table_info(printers)").fetchall()
+            }
+            if "expected_lifetime_hours" in cols:
+                conn.exec_driver_sql(
+                    "UPDATE printers SET amortization_years = "
+                    "expected_lifetime_hours / (250.0 * 8.0) "
+                    "WHERE expected_lifetime_hours IS NOT NULL "
+                    "AND expected_lifetime_hours > 0"
+                )
+
+
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    """Sesión transaccional para usar fuera de las rutas (poller, scripts)."""
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_session() -> Iterator[Session]:
+    """Dependencia de FastAPI."""
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()

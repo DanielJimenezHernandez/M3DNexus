@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Datos y secretos (NO subir): BD, backups, config real y token de HA
+data/
+*.db
+*.db-wal
+*.db-shm
+config.yaml
+.env
+
+# Dependencias JS puntuales (los tests con jsdom se instalan fuera del repo)
+node_modules/
+package-lock.json
+
+# Sistema operativo / editores
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/

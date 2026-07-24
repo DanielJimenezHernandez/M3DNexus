@@ -122,6 +122,53 @@ def _migrate() -> None:
                     "AND expected_lifetime_hours > 0"
                 )
 
+        # Amplía la clave única de print_jobs a (printer, job_id, start_time).
+        # Se hace al final: la tabla ya tiene todas sus columnas actuales.
+        _widen_print_job_key(conn)
+
+
+def _widen_print_job_key(conn) -> None:
+    """Reconstruye print_jobs para meter start_time en la clave única.
+
+    SQLite no deja soltar el auto-índice de una UNIQUE declarada, así que la
+    única vía es recrear la tabla. Solo se hace si sigue la clave vieja de dos
+    columnas; después es idempotente.
+    """
+    from .models import PrintJob
+
+    uniques = [
+        row[1]
+        for row in conn.exec_driver_sql("PRAGMA index_list(print_jobs)").fetchall()
+        if row[2]  # es UNIQUE
+    ]
+    old_key = None
+    for name in uniques:
+        cols = [
+            r[2] for r in conn.exec_driver_sql(f"PRAGMA index_info('{name}')").fetchall()
+        ]
+        if cols == ["printer_id", "moonraker_job_id"]:
+            old_key = name
+            break
+    if old_key is None:
+        return  # ya migrada (o tabla recién creada con la clave nueva)
+
+    old_cols = {
+        row[1]
+        for row in conn.exec_driver_sql("PRAGMA table_info(print_jobs)").fetchall()
+    }
+    common = [c.name for c in PrintJob.__table__.columns if c.name in old_cols]
+    collist = ", ".join(common)
+
+    conn.exec_driver_sql("ALTER TABLE print_jobs RENAME TO _print_jobs_old")
+    # El índice con nombre viaja con la tabla al renombrarla; se suelta para que
+    # al recrear la tabla no choque su nombre.
+    conn.exec_driver_sql("DROP INDEX IF EXISTS ix_print_jobs_moonraker_job_id")
+    PrintJob.__table__.create(bind=conn)
+    conn.exec_driver_sql(
+        f"INSERT INTO print_jobs ({collist}) SELECT {collist} FROM _print_jobs_old"
+    )
+    conn.exec_driver_sql("DROP TABLE _print_jobs_old")
+
 
 @contextmanager
 def session_scope() -> Iterator[Session]:

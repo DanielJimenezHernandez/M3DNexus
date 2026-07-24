@@ -201,35 +201,46 @@ def ingest_job(
     if job.status not in FINISHED_STATES or job.end_time is None:
         return None  # en curso: aún no computable
 
+    # La misma impresión se identifica por (impresora, job_id, inicio). El inicio
+    # distingue un job_id reutilizado tras reiniciar el historial de Moonraker.
     record = session.scalar(
         select(PrintJob).where(
             PrintJob.printer_id == printer.id,
             PrintJob.moonraker_job_id == job.job_id,
+            PrintJob.start_time == job.start_time,
         )
     )
-    # Ya resuelto: no rehacemos trabajo (ni, sobre todo, llamadas a HA).
-    if record is not None and _is_settled(record):
-        return record
 
-    is_new = record is None
-    if record is None:
-        record = PrintJob(
-            printer_id=printer.id, moonraker_job_id=job.job_id
-        )
-        session.add(record)
-
-    # Auto-crear filamento solo en jobs nuevos terminados a partir de la marca
-    # (evita llenar la BD con el back-catálogo). Los re-procesados y los antiguos
-    # caen al material genérico por tipo.
+    # Auto-crear el filamento de impresiones terminadas a partir de la marca
+    # (así el back-catálogo, anterior a la marca, no llena la BD de materiales).
+    # NO se exige que el registro sea nuevo: si el historial de Moonraker se
+    # reinició, una impresión reciente puede caer sobre un registro viejo con el
+    # mismo job_id, y aun así su filamento debe resolverse/crearse bien, no caer
+    # al genérico por tipo.
     allow_create = (
-        is_new
-        and autocreate_since is not None
+        autocreate_since is not None
         and job.end_time is not None
         and job.end_time >= autocreate_since
     )
     material = resolve_or_create_material(
         session, job.metadata, job.filament_type, allow_create
     )
+
+    # Ya resuelto y con energía: no rehacemos trabajo (ni, sobre todo, llamadas a
+    # HA). Excepción: si ahora se resuelve un material CONCRETO distinto del
+    # guardado —típico de un registro que se quedó en genérico— se reprocesa para
+    # corregirlo; la energía ya resuelta no se vuelve a pedir. Cuando no hay
+    # material que resolver (metadatos sin nombre) no se fuerza nada, para no
+    # pisar una asignación hecha a mano.
+    material_ok = material is None or record and record.material_id == material.id
+    if record is not None and _is_settled(record) and material_ok:
+        return record
+
+    if record is None:
+        record = PrintJob(
+            printer_id=printer.id, moonraker_job_id=job.job_id
+        )
+        session.add(record)
 
     record.filename = job.filename
     record.status = job.status

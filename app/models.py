@@ -122,8 +122,15 @@ class Material(Base):
 
 class PrintJob(Base):
     __tablename__ = "print_jobs"
+    # start_time entra en la clave a propósito: si el historial de Moonraker se
+    # reinicia, los job_id vuelven a empezar bajos y uno reutilizado chocaría
+    # con un registro antiguo. Con el inicio en la clave, ese caso crea un
+    # registro nuevo en vez de pisar el viejo; la misma impresión resincronizada
+    # sigue casando porque su start_time es estable.
     __table_args__ = (
-        UniqueConstraint("printer_id", "moonraker_job_id", name="uq_printer_job"),
+        UniqueConstraint(
+            "printer_id", "moonraker_job_id", "start_time", name="uq_printer_job"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

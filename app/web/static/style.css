@@ -246,3 +246,61 @@ td a:hover { text-decoration: underline; }
 .oi-names { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
 .oi-gcode { font-size: 0.75rem; }
 .oi-eta { font-variant-numeric: tabular-nums; }
+.cal-tags { display: flex; flex-wrap: wrap; gap: 0.25rem; max-width: 280px; }
+.cal-tags .pill { font-size: 0.72rem; }
+
+/* Filtros multi-selección (checkboxes) y modal de color en Materiales. */
+.filter-dd { position: relative; }
+.filter-btn.filter-active, #mat-color-btn.filter-active {
+  border-color: var(--accent); color: var(--accent); }
+.filter-panel { position: absolute; top: 110%; left: 0; z-index: 40; min-width: 170px;
+  max-height: 320px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.4rem; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.filter-opt { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.4rem;
+  border-radius: 6px; cursor: pointer; font-size: 0.85rem; white-space: nowrap; }
+.filter-opt:hover { background: var(--panel-2); }
+.filter-opt input { width: auto; }
+
+.modal-ov { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.6);
+  display: flex; align-items: center; justify-content: center; padding: 1rem; }
+/* Sin esto, display:flex pisa el atributo [hidden] y el overlay tapa la página. */
+.modal-ov[hidden] { display: none; }
+.modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 1rem; max-width: 720px; width: 100%; max-height: 80vh; overflow-y: auto; }
+.color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.5rem; margin: 0.6rem 0; }
+.color-cell { display: flex; flex-direction: column; align-items: center; gap: 0.3rem;
+  background: var(--panel-2); border: 2px solid transparent; border-radius: 10px;
+  padding: 0.5rem 0.3rem; cursor: pointer; color: var(--text); }
+.color-cell.sel { border-color: var(--accent); }
+.swatch.big { width: 40px; height: 40px; border-radius: 8px; border: 1px solid var(--border); }
+.swatch.big.none { background: repeating-linear-gradient(45deg, var(--panel) 0 6px, var(--panel-2) 6px 12px); }
+.color-name { font-size: 0.72rem; text-align: center; line-height: 1.1;
+  overflow: hidden; text-overflow: ellipsis; max-width: 90px; }
+.filter-sep { height: 1px; background: var(--border); margin: 0.25rem 0; }
+.filter-opt.filter-all { font-size: 0.85rem; }
+
+/* Gastos extra y anticipo en pedidos. */
+.expense-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.4rem; }
+.expense-row .exp-label { flex: 1; }
+.expense-row .exp-amount { max-width: 120px; }
+.oi-expenses { margin: 0.4rem 0; }
+.oi-expenses summary { cursor: pointer; font-size: 0.8rem; }
+.oi-exp-host, #of-expenses { margin-top: 0.4rem; }
+.ped-summary { font-size: 0.9rem; }
+.ped-summary .ped-margin strong { color: var(--good); }
+
+/* Estado por copia en piezas de pedido. */
+.oi-copies-wrap { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0.3rem 0; }
+.oi-copies { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.copy-count { font-size: 0.78rem; margin-right: 0.3rem; }
+.copy-chip { width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border);
+  cursor: pointer; font-size: 0.72rem; padding: 0; color: var(--text); }
+.copy-chip.cs-pending { background: var(--panel-2); }
+.copy-chip.cs-printing { background: rgba(79,140,255,.25); border-color: var(--accent); }
+.copy-chip.cs-done { background: rgba(62,207,142,.28); border-color: var(--good); }
+.copy-mini { display: inline-flex; gap: 2px; align-items: center; }
+.copy-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.copy-dot.cs-pending { background: var(--muted); opacity: .5; }
+.copy-dot.cs-printing { background: var(--accent); }
+.copy-dot.cs-done { background: var(--good); }

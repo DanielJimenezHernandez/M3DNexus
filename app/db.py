@@ -48,6 +48,12 @@ def _migrate() -> None:
         },
         "orders": {
             "folder": "ALTER TABLE orders ADD COLUMN folder VARCHAR",
+            "deposit_amount": "ALTER TABLE orders ADD COLUMN deposit_amount FLOAT",
+            "extra_expenses": "ALTER TABLE orders ADD COLUMN extra_expenses JSON",
+        },
+        "order_items": {
+            "extra_expenses": "ALTER TABLE order_items ADD COLUMN extra_expenses JSON",
+            "copy_status": "ALTER TABLE order_items ADD COLUMN copy_status JSON",
         },
         "printers": {
             "orca_aliases": "ALTER TABLE printers ADD COLUMN orca_aliases JSON",

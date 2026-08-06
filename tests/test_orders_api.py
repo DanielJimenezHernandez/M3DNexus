@@ -183,3 +183,92 @@ class TestCarpetaLocal:
         c, _ = env
         c.put("/api/settings", json={"orders_folder_base": "/base/Pedidos"})
         assert c.get("/api/settings").json()["orders_folder_base"] == "/base/Pedidos"
+
+
+class TestGastosExtraYAnticipo:
+    def test_gastos_del_pedido_restan_del_margen(self, env):
+        c, _ = env
+        r = c.post("/api/orders", json={
+            "client": "ACME", "agreed_price": 100.0,
+            "extra_expenses": [{"label": "empaque", "amount": 15}, {"label": "envío", "amount": 5}],
+            "items": [],
+        })
+        o = r.json()
+        assert o["margin"]["cost"] == 20.0          # 15 + 5
+        assert o["margin"]["profit"] == 80.0         # 100 - 20
+        assert len(o["extra_expenses"]) == 2
+
+    def test_gastos_por_pieza_tambien_restan(self, env):
+        c, _ = env
+        r = c.post("/api/orders", json={
+            "client": "ACME", "agreed_price": 50.0,
+            "items": [{"printer_id": 1, "gcode_filename": "x.gcode",
+                       "extra_expenses": [{"label": "velita", "amount": 8}]}],
+        })
+        o = r.json()
+        assert o["margin"]["cost"] == 8.0
+        assert o["items"][0]["extra_expenses"][0]["label"] == "velita"
+
+    def test_importe_negativo_se_acota_a_cero(self, env):
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "agreed_price": 10,
+            "extra_expenses": [{"label": "x", "amount": -5}]}).json()
+        assert o["margin"]["cost"] == 0.0
+
+    def test_anticipo_guarda_monto_recibido(self, env):
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "payment_status": "deposit",
+            "deposit_amount": 500, "agreed_price": 2000}).json()
+        assert o["payment_status"] == "deposit"
+        assert o["deposit_amount"] == 500
+
+    def test_monto_recibido_se_limpia_si_no_es_anticipo(self, env):
+        # Si el pago no es anticipo, el monto recibido no se conserva.
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "payment_status": "paid",
+            "deposit_amount": 500}).json()
+        assert o["deposit_amount"] is None
+
+    def test_editar_conserva_gastos_reemplazando(self, env):
+        c, _ = env
+        oid = c.post("/api/orders", json={"client": "A",
+            "extra_expenses": [{"label": "a", "amount": 1}]}).json()["id"]
+        o = c.put(f"/api/orders/{oid}", json={"client": "A",
+            "extra_expenses": [{"label": "b", "amount": 2}, {"label": "c", "amount": 3}]}).json()
+        assert len(o["extra_expenses"]) == 2
+        assert o["margin"] is None   # sin precio, no hay margen aunque haya gastos
+
+
+class TestEstadoPorCopia:
+    def test_marcar_copias_hechas_se_refleja(self, env):
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "items": [
+            {"printer_id": 1, "gcode_filename": "p.gcode", "quantity": 4,
+             "copy_status": ["done", "done", "pending", "pending"]}]}).json()
+        it = o["items"][0]
+        assert it["printed"] == 2
+        assert it["status"] == "partial"
+        assert it["copy_status"] == ["done", "done", "pending", "pending"]
+
+    def test_se_rellena_a_la_cantidad(self, env):
+        # copy_status más corto que quantity: se completa con "pending".
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "items": [
+            {"printer_id": 1, "gcode_filename": "p.gcode", "quantity": 3,
+             "copy_status": ["done"]}]}).json()
+        assert o["items"][0]["copy_status"] == ["done", "pending", "pending"]
+        assert o["items"][0]["printed"] == 1
+
+    def test_todo_pendiente_no_se_guarda(self, env):
+        # Si nada está marcado, copy_status queda vacío (vuelve al automático).
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "items": [
+            {"printer_id": 1, "gcode_filename": "p.gcode", "quantity": 2,
+             "copy_status": ["pending", "pending"]}]}).json()
+        assert o["items"][0]["copy_status"] == []
+
+    def test_estado_invalido_se_rechaza(self, env):
+        c, _ = env
+        r = c.post("/api/orders", json={"client": "A", "items": [
+            {"printer_id": 1, "gcode_filename": "p.gcode", "copy_status": ["hecho"]}]})
+        assert r.status_code == 422

@@ -288,6 +288,11 @@ class Order(Base):
     # "01", "112"), donde viven los STL/3MF/gcode de origen. Solo referencia:
     # el servidor no accede a esa carpeta, vive en el equipo del usuario.
     folder: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Anticipo recibido (solo relevante con payment_status = deposit).
+    deposit_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Gastos extra del pedido en general (empaque, envío…): lista de
+    # {label, amount}. Son costes, así que restan al margen.
+    extra_expenses: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     items: Mapped[list["OrderItem"]] = relationship(
@@ -311,6 +316,12 @@ class OrderItem(Base):
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     # Override manual por pieza (done|failed); null = deducido de la realidad.
     manual_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Estado por copia, marcado a mano: lista de "pending|printing|done" de
+    # longitud <= quantity. Si está puesto, manda sobre lo deducido de Moonraker
+    # (así se lleva a mano cuántas de las N copias van hechas).
+    copy_status: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Gastos extra de esta pieza (velitas, bolsa…): lista de {label, amount}.
+    extra_expenses: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     order: Mapped["Order"] = relationship(back_populates="items")
@@ -326,6 +337,12 @@ PAYMENT_STATES = {PAY_PENDING, PAY_DEPOSIT, PAY_PAID}
 # Overrides manuales.
 ORDER_MANUAL = {"delivered", "cancelled", "on_hold"}
 ITEM_MANUAL = {"done", "failed"}
+
+# Estado por copia (marcado a mano en cada pieza del pedido).
+COPY_PENDING = "pending"
+COPY_PRINTING = "printing"
+COPY_DONE = "done"
+COPY_STATES = {COPY_PENDING, COPY_PRINTING, COPY_DONE}
 
 
 class Setting(Base):

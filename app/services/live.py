@@ -29,6 +29,28 @@ from .sync import _ha_client
 log = logging.getLogger(__name__)
 
 
+def file_progress(status: dict, meta: dict) -> float:
+    """Progreso 0..1 por posición en el archivo, como Fluidd/Mainsail.
+
+    Preferencia:
+      1. Posición relativa al gcode real: (pos − inicio) / (fin − inicio). Excluye
+         la cabecera con miniaturas y el pie, así que no infla el porcentaje.
+      2. ``virtual_sdcard.progress`` (posición absoluta / tamaño) si faltan los
+         bytes de inicio/fin en los metadatos.
+      3. ``display_status.progress`` (M73 del laminador, por tiempo) como último
+         recurso.
+    """
+    vs = status.get("virtual_sdcard") or {}
+    pos = vs.get("file_position")
+    start = meta.get("gcode_start_byte")
+    end = meta.get("gcode_end_byte")
+    if pos is not None and start is not None and end and end > start:
+        return min(1.0, max(0.0, (pos - start) / (end - start)))
+    if vs.get("progress") is not None:
+        return float(vs["progress"])
+    return float((status.get("display_status") or {}).get("progress") or 0.0)
+
+
 class LiveTracker:
     """Cache en memoria del estado en vivo por impresora."""
 
@@ -63,11 +85,6 @@ class LiveTracker:
                 filename = ps.get("filename")
                 print_duration = float(ps.get("print_duration") or 0.0)
                 filament_mm = float(ps.get("filament_used") or 0.0)
-                progress = (
-                    status.get("display_status", {}).get("progress")
-                    or status.get("virtual_sdcard", {}).get("progress")
-                    or 0.0
-                )
 
                 # Inicio: se conserva entre ciclos si es la misma impresión;
                 # si arrancamos a media impresión, se aproxima.
@@ -80,6 +97,10 @@ class LiveTracker:
                 # Material y ETA desde los metadatos del laminador (sin crear:
                 # el filamento se crea cuando la impresión termina y se ingiere).
                 meta = client.file_metadata(filename) or {}
+
+                # Progreso por posición en el archivo (como Fluidd/Mainsail), que
+                # es más consistente que el M73 por tiempo del laminador.
+                progress = file_progress(status, meta)
                 material = resolve_or_create_material(
                     session, meta, meta.get("filament_type"), allow_create=False
                 )

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — coste de impresiones 3D</title>
-  <link rel="stylesheet" href="/style.css?v=29" />
+  <link rel="stylesheet" href="/style.css?v=37" />
 </head>
 <body>
   <header>
@@ -76,17 +76,9 @@
         <span class="spacer"></span>
         <button class="btn" id="add-material">+ Añadir material</button>
       </div>
-      <div class="toolbar">
-        <select id="mat-type"><option value="">— todos los tipos —</option></select>
-        <select id="mat-brand"><option value="">— todas las marcas —</option></select>
-        <select id="mat-stock">
-          <option value="">— todo el stock —</option>
-          <option value="full">Completa</option>
-          <option value="half">A medias</option>
-          <option value="low">&lt; 100 g</option>
-          <option value="empty">Agotada</option>
-          <option value="unknown">Sin indicar</option>
-        </select>
+      <div class="toolbar" id="mat-filters">
+        <!-- desplegables de checkboxes generados en JS: tipo, marca, stock -->
+        <button class="btn ghost small" id="mat-color-btn">Color ▾</button>
         <input type="search" id="mat-search" placeholder="Filtrar nombre o color…" />
         <button class="btn ghost small" id="mat-clear">Limpiar</button>
         <span class="spacer"></span>
@@ -94,6 +86,7 @@
       </div>
       <table id="materials-table"></table>
       <div id="material-form-host"></div>
+      <div id="color-modal" class="modal-ov" hidden></div>
     </section>
 
     <!-- Pedidos -->
@@ -109,6 +102,7 @@
         </select>
         <input type="search" id="ped-search" placeholder="Cliente o descripción…" />
         <span class="spacer"></span>
+        <span id="ped-summary" class="ped-summary muted"></span>
         <button class="btn ghost small" id="ped-queue-toggle">Ver cola por impresora</button>
         <button class="btn" id="add-order">+ Nuevo pedido</button>
       </div>
@@ -271,6 +265,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=29"></script>
+  <script src="/app.js?v=37"></script>
 </body>
 </html>

@@ -144,12 +144,33 @@ class AssignMaterialIn(BaseModel):
     material_id: int | None
 
 
+class ExpenseIn(BaseModel):
+    label: str
+    amount: float = 0.0
+
+    @field_validator("amount")
+    @classmethod
+    def _amount(cls, v: float) -> float:
+        return max(0.0, v)
+
+
 class OrderItemIn(BaseModel):
     label: str | None = None
     printer_id: int | None = None
     gcode_filename: str | None = None
     quantity: int = 1
     manual_status: str | None = None
+    copy_status: list[str] = []
+    extra_expenses: list[ExpenseIn] = []
+
+    @field_validator("copy_status")
+    @classmethod
+    def _copy(cls, v: list[str]) -> list[str]:
+        from .models import COPY_STATES
+
+        if any(s not in COPY_STATES for s in v):
+            raise ValueError("Estado de copia inválido")
+        return v
 
     @field_validator("quantity")
     @classmethod
@@ -176,6 +197,8 @@ class OrderIn(BaseModel):
     manual_status: str | None = None
     notes: str | None = None
     folder: str | None = None
+    deposit_amount: float | None = None
+    extra_expenses: list[ExpenseIn] = []
     items: list[OrderItemIn] = []
 
     @field_validator("payment_status")

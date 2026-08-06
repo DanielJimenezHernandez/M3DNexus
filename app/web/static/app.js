@@ -420,10 +420,18 @@ function toggleLoadEditor(printerId) {
       <select class="slot-sel">${matOpts(val)}</select></label>`;
   }).join("");
 
+  // "Seguir el último impreso" solo aplica a un color: desfija lo manual y la
+  // carga vuelve a deducirse de la última impresión. En multicolor no hay de
+  // dónde deducir por hueco, así que no se ofrece.
+  const pinned = slots.some((s) => s.source === "manual");
+  const autoBtn = (n === 1 && pinned)
+    ? `<button class="btn ghost small" data-auto-load="${printerId}">↻ Seguir el último impreso</button>` : "";
+
   row.querySelector("td").innerHTML = `<div class="load-editor">
     <div class="form-grid">${selects}</div>
     <div class="row-actions" style="margin-top:.6rem">
       <button class="btn small" data-save-load="${printerId}">Guardar carga</button>
+      ${autoBtn}
       <button class="btn ghost small" data-cancel-load="${printerId}">Cerrar</button>
     </div></div>`;
   row.hidden = false;
@@ -434,8 +442,23 @@ function toggleLoadEditor(printerId) {
     toast("Carga actualizada");
     loadPrinters();
   };
+  const auto = row.querySelector(`[data-auto-load]`);
+  if (auto) auto.onclick = async () => {
+    await api.send(`/api/printers/${printerId}/loaded`, "PUT", { materials: [] });
+    toast("Volverá a seguir el último impreso");
+    loadPrinters();
+  };
   row.querySelector(`[data-cancel-load]`).onclick = () => (row.hidden = true);
 }
+
+// Refresco en vivo del "cargado ahora" mientras se mira la pestaña. Se salta si
+// hay un formulario de impresora o un editor de carga abierto, para no cerrarlo.
+setInterval(() => {
+  if (currentTab !== "printers") return;
+  if (document.getElementById("printer-form-host").innerHTML) return;
+  if ([...document.querySelectorAll(".load-editor-row")].some((r) => !r.hidden)) return;
+  loadPrinters();
+}, 15000);
 
 function printerForm(p = {}) {
   const host = document.getElementById("printer-form-host");
@@ -511,8 +534,29 @@ const stockDot = (lvl) => {
   return `<span class="swatch" style="background:${col}"></span>${txt}`;
 };
 
+// Calibración por material: { material_id: { impresora: mejorNivel } }.
+// Solo cuenta como "calibrado" lo que representa una calibración real.
+let calByMaterial = {};
+const CAL_RANK = { FULL: 3, BASIC: 2, CALIBRATED: 1 };
+
+let matUsage = {};   // { material_id: { count, last_used } }
+
 async function loadMaterials() {
-  materials = await api.get("/api/materials");
+  const [mats, cals, usage] = await Promise.all([
+    api.get("/api/materials"),
+    api.get("/api/calibrations").catch(() => []),
+    api.get("/api/materials/usage").catch(() => ({})),
+  ]);
+  materials = mats;
+  matUsage = usage || {};
+
+  calByMaterial = {};
+  for (const c of cals) {
+    if (!(c.status in CAL_RANK)) continue;   // NOT_TUNED / UNKNOWN no cuentan
+    const byPrinter = (calByMaterial[c.material_id] ||= {});
+    const prev = byPrinter[c.printer];
+    if (!prev || CAL_RANK[c.status] > CAL_RANK[prev]) byPrinter[c.printer] = c.status;
+  }
 
   // Desplegables poblados con lo que hay (mismo criterio que en Calibración).
   const opts = (sel, valores) => {
@@ -523,28 +567,171 @@ async function loadMaterials() {
       [...new Set(valores)].filter(Boolean).sort()
         .map((v) => `<option value="${escHtml(v)}" ${v === actual ? "selected" : ""}>${escHtml(v)}</option>`).join("");
   };
-  opts("mat-type", materials.map((m) => m.material_type));
-  opts("mat-brand", materials.map((m) => m.brand));
+  buildMatFilters();
   renderMaterialsTable();
+}
+
+// Filtros multi-selección (tipo/marca/stock/color), estilo Excel. Cada uno es
+// un conjunto: vacío = sin filtrar; con elementos = solo esos.
+const matFilter = { type: new Set(), brand: new Set(), stock: new Set(), color: new Set() };
+const STOCK_LABEL = { full: "Completa", half: "A medias", low: "< 100 g",
+                      empty: "Agotada", unknown: "Sin indicar" };
+const NO_BRAND = " nobrand";   // centinela para materiales sin marca
+const NO_COLOR = " nocolor";
+
+function buildMatFilters() {
+  const host = document.getElementById("mat-filters");
+  // Se limpian los desplegables previos (se reconstruyen con los valores al día).
+  host.querySelectorAll(".filter-dd").forEach((n) => n.remove());
+
+  const types = [...new Set(materials.map((m) => m.material_type).filter(Boolean))].sort();
+  const brands = [...new Set(materials.map((m) => m.brand))];
+  const brandOpts = brands.filter(Boolean).sort().map((b) => ({ value: b, label: b }));
+  if (brands.some((b) => !b)) brandOpts.push({ value: NO_BRAND, label: "(sin marca)" });
+  const stocks = [...new Set(materials.map((m) => m.stock_level || "unknown"))];
+
+  // Se insertan antes del botón Color; para que queden Tipo, Marca, Stock en la
+  // barra, se añaden en ese orden (cada uno queda a la izquierda del anterior).
+  const anchor = document.getElementById("mat-color-btn");
+  makeCheckDropdown(host, anchor, "Tipo", "type",
+    types.map((t) => ({ value: t, label: t })));
+  makeCheckDropdown(host, anchor, "Marca", "brand", brandOpts);
+  makeCheckDropdown(host, anchor, "Stock", "stock",
+    stocks.sort().map((s) => ({ value: s, label: STOCK_LABEL[s] || s })));
+}
+
+// Desplegable de checkboxes. Inserta antes del botón de Color para mantener orden.
+function makeCheckDropdown(host, before, label, key, options) {
+  const dd = el(`<div class="filter-dd">
+    <button type="button" class="btn ghost small filter-btn">${label} ▾</button>
+    <div class="filter-panel" hidden>
+      ${options.length ? `<label class="filter-opt filter-all">
+        <input type="checkbox" class="filter-master"> <strong>(Seleccionar todo)</strong></label>
+        <div class="filter-sep"></div>` : ""}
+      ${options.map((o) => `<label class="filter-opt">
+        <input type="checkbox" value="${escHtml(o.value)}" ${matFilter[key].has(o.value) ? "checked" : ""}>
+        ${escHtml(o.label)}</label>`).join("") || '<span class="muted">Sin opciones</span>'}
+    </div>
+  </div>`);
+  host.insertBefore(dd, before);
+
+  const btn = dd.querySelector(".filter-btn");
+  const panel = dd.querySelector(".filter-panel");
+  const boxes = [...panel.querySelectorAll("input:not(.filter-master)")];
+  const master = panel.querySelector(".filter-master");
+
+  const refreshLabel = () => {
+    const n = matFilter[key].size;
+    btn.textContent = n ? `${label} (${n}) ▾` : `${label} ▾`;
+    btn.classList.toggle("filter-active", n > 0);
+  };
+  const refreshMaster = () => {
+    if (!master) return;
+    const n = matFilter[key].size, total = boxes.length;
+    master.checked = n === total && total > 0;
+    master.indeterminate = n > 0 && n < total;   // algunos, no todos
+  };
+  refreshLabel();
+  refreshMaster();
+
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const wasOpen = !panel.hidden;
+    closeAllPanels();
+    panel.hidden = wasOpen;
+  };
+  panel.onclick = (e) => e.stopPropagation();
+
+  boxes.forEach((chk) =>
+    chk.addEventListener("change", () => {
+      chk.checked ? matFilter[key].add(chk.value) : matFilter[key].delete(chk.value);
+      refreshLabel(); refreshMaster();
+      renderMaterialsTable();
+    }));
+
+  if (master) master.addEventListener("change", () => {
+    // Excel: si no está todo marcado, marca todo; si lo está, lo quita.
+    const selectAll = matFilter[key].size < boxes.length;
+    matFilter[key].clear();
+    boxes.forEach((chk) => {
+      chk.checked = selectAll;
+      if (selectAll) matFilter[key].add(chk.value);
+    });
+    refreshLabel(); refreshMaster();
+    renderMaterialsTable();
+  });
+}
+
+function closeAllPanels() {
+  document.querySelectorAll(".filter-panel").forEach((p) => (p.hidden = true));
+}
+document.addEventListener("click", closeAllPanels);
+
+// Tags de las impresoras donde el material está calibrado, coloreados por nivel.
+const CAL_TAG_TITLE = { FULL: "calibrado a fondo (PA/flow)", BASIC: "solo temperaturas",
+                        CALIBRATED: "deducido del historial" };
+function calibratedTags(materialId) {
+  const byPrinter = calByMaterial[materialId];
+  if (!byPrinter) return `<span class="muted">—</span>`;
+  return Object.entries(byPrinter)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([printer, level]) =>
+      `<span class="pill cal-${level}" title="${escHtml(printer)}: ${CAL_TAG_TITLE[level]}">${escHtml(printer)}</span>`)
+    .join(" ");
+}
+
+// Fecha relativa compacta para "último uso".
+function agoLabel(iso) {
+  if (!iso) return `<span class="muted">nunca</span>`;
+  const d = new Date(iso), days = Math.floor((Date.now() - d) / 86400000);
+  let txt;
+  if (days <= 0) txt = "hoy";
+  else if (days === 1) txt = "ayer";
+  else if (days < 30) txt = `hace ${days} d`;
+  else if (days < 365) txt = `hace ${Math.floor(days / 30)} mes`;
+  else txt = `hace ${Math.floor(days / 365)} año${days >= 730 ? "s" : ""}`;
+  return `<span title="${d.toLocaleString()}">${txt}</span>`;
+}
+
+// Orden de la tabla de materiales. key null = orden natural (nombre, del API).
+let matSort = { key: null, dir: "asc" };
+function matSortValue(m, key) {
+  const u = matUsage[m.id] || {};
+  return ({
+    name: m.name.toLowerCase(),
+    price: m.price_per_kg || 0,
+    last_used: u.last_used ? new Date(u.last_used).getTime() : -1,  // nunca = al fondo
+  })[key];
 }
 
 function renderMaterialsTable() {
   const q = (document.getElementById("mat-search")?.value || "").toLowerCase();
-  const tipo = document.getElementById("mat-type")?.value || "";
-  const marca = document.getElementById("mat-brand")?.value || "";
-  const stock = document.getElementById("mat-stock")?.value || "";
+  const f = matFilter;
   const filas = materials.filter((m) =>
-    (!tipo || m.material_type === tipo) &&
-    (!marca || m.brand === marca) &&
-    (!stock || (m.stock_level || "unknown") === stock) &&
+    (!f.type.size || f.type.has(m.material_type)) &&
+    (!f.brand.size || f.brand.has(m.brand || NO_BRAND)) &&
+    (!f.stock.size || f.stock.has(m.stock_level || "unknown")) &&
+    (!f.color.size || f.color.has(m.color_hex || NO_COLOR)) &&
     (!q || `${m.name} ${m.brand || ""} ${m.color || ""}`.toLowerCase().includes(q)));
+
+  if (matSort.key) {
+    const sign = matSort.dir === "asc" ? 1 : -1;
+    filas.sort((a, b) => {
+      const x = matSortValue(a, matSort.key), y = matSortValue(b, matSort.key);
+      return x < y ? -sign : x > y ? sign : 0;
+    });
+  }
 
   const cnt = document.getElementById("mat-count");
   if (cnt) cnt.textContent = `${filas.length} de ${materials.length} materiales`;
 
+  const arrow = (k) => matSort.key === k ? (matSort.dir === "asc" ? " ▲" : " ▼") : "";
+  const th = (k, label, cls = "") =>
+    `<th class="sortable ${cls}" data-msort="${k}">${label}${arrow(k)}</th>`;
+
   document.getElementById("materials-table").innerHTML =
-    `<tr><th>Nombre</th><th>Tipo</th><th>Marca</th><th>Color</th><th class="num">Precio/kg</th>
-     <th>Stock</th><th></th><th></th></tr>` +
+    `<tr>${th("name", "Nombre")}<th>Impresoras</th><th>Tipo</th><th>Marca</th><th>Color</th>
+     ${th("price", "Precio/kg", "num")}<th>Stock</th>${th("last_used", "Último uso")}<th></th><th></th></tr>` +
     (filas.length ? filas.map((m) => {
       const noPrice = (m.price_per_kg || 0) <= 0
         ? ` <span class="pill review">poner precio</span>` : "";
@@ -552,17 +739,29 @@ function renderMaterialsTable() {
       const buy = m.purchase_url
         ? `<a class="btn ghost small" href="${escHtml(m.purchase_url)}" target="_blank" rel="noopener" title="Recomprar">🛒</a>` : "";
       const sw = m.color_hex ? `<span class="swatch" style="background:${escHtml(m.color_hex)}"></span>` : "";
+      const u = matUsage[m.id] || {};
       return `<tr>
-        <td>${sw}${escHtml(m.name)}${auto}</td><td>${escHtml(m.material_type)}</td>
+        <td>${sw}${escHtml(m.name)}${auto}</td>
+        <td class="cal-tags">${calibratedTags(m.id)}</td>
+        <td>${escHtml(m.material_type)}</td>
         <td class="muted">${escHtml(m.brand || "—")}</td><td class="muted">${escHtml(m.color || "—")}</td>
         <td class="num">${money(m.price_per_kg)}${noPrice}</td>
         <td>${stockDot(m.stock_level)}</td>
+        <td title="${u.count ? u.count + " impresiones" : "sin impresiones"}">${agoLabel(u.last_used)}</td>
         <td>${buy}</td>
         <td class="row-actions">
           <button class="btn ghost small" data-edit-mat="${m.id}">Editar</button>
           <button class="btn danger small" data-del-mat="${m.id}">✕</button>
         </td></tr>`;
-    }).join("") : `<tr><td colspan="8" class="muted">Sin materiales con ese filtro</td></tr>`);
+    }).join("") : `<tr><td colspan="10" class="muted">Sin materiales con ese filtro</td></tr>`);
+
+  document.querySelectorAll("#materials-table th[data-msort]").forEach((h) =>
+    h.addEventListener("click", () => {
+      const k = h.dataset.msort;
+      if (matSort.key === k) matSort.dir = matSort.dir === "asc" ? "desc" : "asc";
+      else matSort = { key: k, dir: k === "last_used" ? "desc" : "asc" };  // fecha: reciente primero
+      renderMaterialsTable();
+    }));
 
   document.querySelectorAll("[data-edit-mat]").forEach((b) =>
     b.addEventListener("click", () => materialForm(materials.find((m) => m.id == b.dataset.editMat))));
@@ -784,13 +983,71 @@ function materialForm(m = {}) {
 }
 document.getElementById("add-material").addEventListener("click", () => materialForm());
 document.getElementById("mat-search").addEventListener("input", renderMaterialsTable);
-["mat-type", "mat-brand", "mat-stock"].forEach((id) =>
-  document.getElementById(id).addEventListener("change", renderMaterialsTable));
 document.getElementById("mat-clear").addEventListener("click", () => {
-  ["mat-search", "mat-type", "mat-brand", "mat-stock"].forEach((id) =>
-    (document.getElementById(id).value = ""));
+  document.getElementById("mat-search").value = "";
+  Object.values(matFilter).forEach((set) => set.clear());
+  buildMatFilters();            // reconstruye los desplegables (desmarca todo)
+  updateColorBtn();
   renderMaterialsTable();
 });
+document.getElementById("mat-color-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  openColorModal();
+});
+
+// --- Filtro por color: modal con las muestras de la BD -----------------------
+function updateColorBtn() {
+  const n = matFilter.color.size;
+  const btn = document.getElementById("mat-color-btn");
+  btn.textContent = n ? `Color (${n}) ▾` : "Color ▾";
+  btn.classList.toggle("filter-active", n > 0);
+}
+
+function openColorModal() {
+  // Muestras únicas por hex, con un nombre representativo.
+  const byHex = new Map();
+  let hasNoColor = false;
+  for (const m of materials) {
+    if (m.color_hex) {
+      if (!byHex.has(m.color_hex)) byHex.set(m.color_hex, m.color || m.name);
+    } else hasNoColor = true;
+  }
+  const swatches = [...byHex.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+
+  const ov = document.getElementById("color-modal");
+  ov.innerHTML = `<div class="modal-box">
+    <div class="toolbar"><strong>Filtrar por color</strong>
+      <span class="muted">${swatches.length} colores</span>
+      <span class="spacer"></span>
+      <button class="btn ghost small" id="cm-clear">Quitar filtro</button>
+      <button class="btn ghost small" id="cm-close">Cerrar</button></div>
+    <div class="color-grid">
+      ${swatches.map(([hex, name]) => `<button type="button" class="color-cell ${matFilter.color.has(hex) ? "sel" : ""}" data-hex="${escHtml(hex)}" title="${escHtml(name)}">
+        <span class="swatch big" style="background:${escHtml(hex)}"></span>
+        <span class="color-name">${escHtml(name)}</span></button>`).join("")}
+      ${hasNoColor ? `<button type="button" class="color-cell ${matFilter.color.has(NO_COLOR) ? "sel" : ""}" data-hex="${NO_COLOR}" title="Sin color">
+        <span class="swatch big none"></span><span class="color-name">Sin color</span></button>` : ""}
+    </div>
+    <p class="muted" style="font-size:.78rem">Toca los colores que quieras incluir.</p>
+  </div>`;
+  ov.hidden = false;
+
+  ov.querySelector(".modal-box").onclick = (e) => e.stopPropagation();
+  ov.onclick = () => (ov.hidden = true);
+  ov.querySelector("#cm-close").onclick = () => (ov.hidden = true);
+  ov.querySelector("#cm-clear").onclick = () => {
+    matFilter.color.clear(); updateColorBtn(); renderMaterialsTable();
+    ov.querySelectorAll(".color-cell.sel").forEach((c) => c.classList.remove("sel"));
+  };
+  ov.querySelectorAll(".color-cell").forEach((cell) =>
+    cell.addEventListener("click", () => {
+      const hex = cell.dataset.hex;
+      matFilter.color.has(hex) ? matFilter.color.delete(hex) : matFilter.color.add(hex);
+      cell.classList.toggle("sel");
+      updateColorBtn();
+      renderMaterialsTable();
+    }));
+}
 
 // --- Estimación + Presupuesto ------------------------------------------------
 let lastEstimate = null;
@@ -964,7 +1221,26 @@ async function loadPedidos() {
   renderOrders();
 }
 
+// Margen generado: suma del margen de los pedidos pagados o con anticipo (sin
+// cancelados). Se calcula sobre TODOS los pedidos, no sobre los filtrados.
+function renderOrdersSummary() {
+  let margin = 0, received = 0, n = 0, cur = currency;
+  for (const o of orders) {
+    if (o.manual_status === "cancelled") continue;
+    if (!["paid", "deposit"].includes(o.payment_status)) continue;
+    n++;
+    cur = o.currency || cur;
+    if (o.margin) margin += o.margin.profit;
+    received += o.payment_status === "paid" ? (o.agreed_price || 0) : (o.deposit_amount || 0);
+  }
+  const el = document.getElementById("ped-summary");
+  el.innerHTML = n
+    ? `<span class="ped-margin" title="${n} pedidos pagados o con anticipo · recibido ${money2(received, cur)}">Margen generado: <strong>${money2(margin, cur)}</strong></span>`
+    : "";
+}
+
 function renderOrders() {
+  renderOrdersSummary();
   const filter = document.getElementById("ped-filter").value;
   const q = (document.getElementById("ped-search").value || "").toLowerCase();
   const open = (s) => !["delivered", "cancelled"].includes(s);
@@ -990,6 +1266,10 @@ function renderOrders() {
       const eta = printing && it.eta_s != null
         ? `<span class="muted oi-eta" title="tiempo restante estimado">⏳ ${fmtEta(it.eta_s)}</span>` : "";
       const copies = it.quantity > 1 ? ` <span class="muted">${it.printed}/${it.quantity}</span>` : "";
+      // Chips de solo lectura por copia, si se llevan a mano.
+      const copyChips = (it.copy_status && it.copy_status.length)
+        ? `<span class="copy-mini">${it.copy_status.map((s, i) =>
+            `<i class="copy-dot cs-${s}" title="Copia ${i + 1}: ${COPY_LABEL[s]}"></i>`).join("")}</span>` : "";
       // El nombre del gcode que se imprime; la etiqueta (si hay) va encima.
       const gname = (it.gcode_filename || "").split("/").pop();
       const name = it.label
@@ -1006,14 +1286,24 @@ function renderOrders() {
         <span class="oi-names">${name}</span>
         ${printer}
         ${statusPill(ITEM_STATUS, it.status)}${copies}
+        ${copyChips}
         ${eta}
         ${prog}
       </div>`;
     }).join("");
 
     const margin = o.margin
-      ? `<span class="muted" title="coste estimado ${money2(o.margin.cost, cur)}">margen ${money2(o.margin.profit, cur)} (${o.margin.margin_pct}%)</span>`
+      ? `<span class="muted" title="coste estimado ${money2(o.margin.cost, cur)} (incluye gastos extra)">margen ${money2(o.margin.profit, cur)} (${o.margin.margin_pct}%)</span>`
       : (o.agreed_price != null ? `<span class="muted">precio ${money2(o.agreed_price, cur)}</span>` : "");
+    // Anticipo: recibido de cuánto, con lo que falta.
+    const deposit = o.payment_status === "deposit" && o.deposit_amount != null
+      ? `<span class="muted" title="pendiente ${money2((o.agreed_price || 0) - o.deposit_amount, cur)}">· anticipo ${money2(o.deposit_amount, cur)}${o.agreed_price ? " / " + money2(o.agreed_price, cur) : ""}</span>`
+      : "";
+    // Total de gastos extra del pedido (pedido + piezas), si hay.
+    const expTotal = (o.extra_expenses || []).reduce((a, e) => a + (e.amount || 0), 0)
+      + o.items.reduce((a, it) => a + (it.extra_expenses || []).reduce((b, e) => b + (e.amount || 0), 0), 0);
+    const expenses = expTotal > 0
+      ? `<span class="muted" title="empaque, velitas, etc.">· gastos ${money2(expTotal, cur)}</span>` : "";
 
     return `<div class="card order-card">
       <div class="order-head">
@@ -1022,7 +1312,7 @@ function renderOrders() {
         <span class="pill" style="background:var(--panel-2)">${PAY_STATUS[o.payment_status] || o.payment_status}</span>
         ${dueLabel(o.due_date)}
         <span class="spacer"></span>
-        ${margin}
+        ${margin}${deposit}${expenses}
         <button class="btn ghost small" data-edit-order="${o.id}">Editar</button>
         <button class="btn danger small" data-del-order="${o.id}">✕</button>
       </div>
@@ -1052,6 +1342,60 @@ function renderOrders() {
 function money2(v, cur) { return `${(v ?? 0).toFixed(2)} ${cur || currency}`; }
 
 // --- Formulario de pedido con editor de piezas -------------------------------
+// Chips de estado por copia. Cada copia cicla pendiente→imprimiendo→completado.
+const COPY_CYCLE = ["pending", "printing", "done"];
+const COPY_LABEL = { pending: "pendiente", printing: "imprimiendo", done: "completado" };
+
+function renderCopyChips(host, count, statuses) {
+  const st = [...(statuses || [])];
+  while (st.length < count) st.push("pending");
+  st.length = count;
+  const done = st.filter((s) => s === "done").length;
+  host.innerHTML = `<span class="copy-count muted">${done}/${count} completadas</span>` +
+    st.map((s, i) => `<button type="button" class="copy-chip cs-${s}" data-i="${i}" data-s="${s}"
+      title="Copia ${i + 1}: ${COPY_LABEL[s]} (clic para cambiar)">${i + 1}</button>`).join("");
+  host.querySelectorAll(".copy-chip").forEach((chip) =>
+    chip.addEventListener("click", () => {
+      const next = COPY_CYCLE[(COPY_CYCLE.indexOf(chip.dataset.s) + 1) % 3];
+      // Se reconstruye para actualizar el contador manteniendo el resto.
+      const cur = readCopyChips(host);
+      cur[+chip.dataset.i] = next;
+      renderCopyChips(host, count, cur);
+    }));
+}
+function readCopyChips(host) {
+  return [...host.querySelectorAll(".copy-chip")].map((c) => c.dataset.s);
+}
+
+// Editor de una lista de gastos {label, amount}: filas con concepto + importe,
+// y un botón "+ Añadir gasto" que siempre queda al final.
+function expenseEditor(host, expenses) {
+  host.innerHTML = "";
+  const add = el(`<button type="button" class="btn ghost small exp-add">+ Añadir gasto</button>`);
+  const addRow = (e = {}) => {
+    const row = el(`<div class="expense-row">
+      <input class="exp-label" placeholder="Concepto (velitas, empaque…)" value="${escHtml(e.label || "")}">
+      <input class="exp-amount" type="number" step="0.01" min="0" placeholder="0.00" value="${e.amount ?? ""}">
+      <button type="button" class="btn ghost small exp-del">✕</button>
+    </div>`);
+    row.querySelector(".exp-del").onclick = () => row.remove();
+    host.insertBefore(row, add);   // siempre por encima del botón
+  };
+  (expenses || []).forEach(addRow);
+  add.onclick = () => addRow();
+  host.appendChild(add);
+}
+
+// Lee las filas de gastos de un contenedor a [{label, amount}], sin las vacías.
+function readExpenses(host) {
+  return [...host.querySelectorAll(".expense-row")]
+    .map((r) => ({
+      label: r.querySelector(".exp-label").value.trim(),
+      amount: parseFloat(r.querySelector(".exp-amount").value) || 0,
+    }))
+    .filter((e) => e.label || e.amount);
+}
+
 function orderForm(o = {}) {
   const host = document.getElementById("order-form-host");
   const pay = o.payment_status || "pending";
@@ -1066,6 +1410,8 @@ function orderForm(o = {}) {
       <label class="field"><span>Estado de pago</span><select id="of-pay">
         ${Object.entries(PAY_STATUS).map(([k, v]) => `<option value="${k}" ${k === pay ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <label class="field"><span>Precio acordado</span><input type="number" step="0.01" id="of-price" value="${o.agreed_price ?? ""}"></label>
+      <label class="field" id="of-deposit-wrap" ${pay === "deposit" ? "" : "hidden"}><span>Monto recibido (anticipo)</span>
+        <input type="number" step="0.01" id="of-deposit" value="${o.deposit_amount ?? ""}"></label>
       <label class="field"><span>Fecha de entrega</span><input type="date" id="of-due" value="${due}"></label>
       <label class="field"><span>Carpeta local (nº)</span><input id="of-folder" placeholder="${o.id || "p.ej. 112"}" value="${escHtml(o.folder || "")}"></label>
       <label class="field"><span>Estado manual</span><select id="of-manual">
@@ -1079,6 +1425,11 @@ function orderForm(o = {}) {
       <span class="spacer"></span>
       <button class="btn ghost small" id="of-add-item">+ Añadir pieza</button></div>
     <div id="of-items"></div>
+    <div class="order-expenses">
+      <div class="muted" style="font-size:.82rem;margin:.6rem 0 .3rem"><strong>Gastos extra del pedido</strong>
+        (empaque, envío… se restan del margen)</div>
+      <div id="of-expenses"></div>
+    </div>
     <div class="row-actions" style="margin-top:1rem">
       <button class="btn" id="of-save">Guardar</button>
       <button class="btn ghost" id="of-cancel">Cancelar</button></div>
@@ -1086,6 +1437,12 @@ function orderForm(o = {}) {
 
   const itemsHost = host.querySelector("#of-items");
   (o.items && o.items.length ? o.items : [{}]).forEach((it) => addOrderItem(itemsHost, it));
+  expenseEditor(host.querySelector("#of-expenses"), o.extra_expenses);
+
+  // El monto de anticipo solo se muestra si el pago es "anticipo".
+  host.querySelector("#of-pay").addEventListener("change", (e) => {
+    host.querySelector("#of-deposit-wrap").hidden = e.target.value !== "deposit";
+  });
 
   host.querySelector("#of-add-item").onclick = () => addOrderItem(itemsHost, {});
   host.querySelector("#of-cancel").onclick = () => (host.innerHTML = "");
@@ -1104,10 +1461,26 @@ function addOrderItem(host, it) {
       <label class="field"><span>Gcode en la impresora</span><select class="oi-gcode"><option value="">— elige impresora —</option></select></label>
       <label class="field"><span>Cantidad</span><input type="number" min="1" class="oi-qty" value="${it.quantity || 1}"></label>
     </div>
+    <div class="oi-copies-wrap">
+      <span class="muted" style="font-size:.78rem">Estado por copia:</span>
+      <div class="oi-copies"></div>
+    </div>
+    <details class="oi-expenses"><summary class="muted">Gastos extra de esta pieza</summary>
+      <div class="oi-exp-host"></div></details>
     <div class="row-actions"><span class="oi-status muted"></span><span class="spacer"></span>
       <button type="button" class="btn ghost small oi-remove">Quitar pieza</button></div>
   </div>`);
   host.appendChild(row);
+  expenseEditor(row.querySelector(".oi-exp-host"), it.extra_expenses);
+  // Si la pieza ya trae gastos, se abre el bloque para que se vean.
+  if (it.extra_expenses && it.extra_expenses.length) row.querySelector(".oi-expenses").open = true;
+
+  // Chips por copia; se rerenderizan al cambiar la cantidad conservando lo marcado.
+  const copiesHost = row.querySelector(".oi-copies");
+  const qtyInput = row.querySelector(".oi-qty");
+  renderCopyChips(copiesHost, Math.max(1, parseInt(qtyInput.value) || 1), it.copy_status);
+  qtyInput.addEventListener("input", () =>
+    renderCopyChips(copiesHost, Math.max(1, parseInt(qtyInput.value) || 1), readCopyChips(copiesHost)));
 
   const printerSel = row.querySelector(".oi-printer");
   const gcodeSel = row.querySelector(".oi-gcode");
@@ -1152,19 +1525,25 @@ async function saveOrder(id, host) {
     printer_id: row.querySelector(".oi-printer").value ? +row.querySelector(".oi-printer").value : null,
     gcode_filename: row.querySelector(".oi-gcode").value || null,
     quantity: Math.max(1, parseInt(row.querySelector(".oi-qty").value) || 1),
+    copy_status: readCopyChips(row.querySelector(".oi-copies")),
+    extra_expenses: readExpenses(row.querySelector(".oi-exp-host")),
   }));
   const client = host.querySelector("#of-client").value.trim();
   if (!client) { toast("El pedido necesita un cliente"); return; }
   const due = host.querySelector("#of-due").value;
   const price = host.querySelector("#of-price").value;
+  const pay = host.querySelector("#of-pay").value;
+  const deposit = host.querySelector("#of-deposit").value;
   const body = {
     client,
     description: host.querySelector("#of-desc").value || null,
-    payment_status: host.querySelector("#of-pay").value,
+    payment_status: pay,
     agreed_price: price ? parseFloat(price) : null,
+    deposit_amount: pay === "deposit" && deposit ? parseFloat(deposit) : null,
     due_date: due ? new Date(due).toISOString() : null,
     manual_status: host.querySelector("#of-manual").value || null,
     folder: host.querySelector("#of-folder").value.trim() || null,
+    extra_expenses: readExpenses(host.querySelector("#of-expenses")),
     items,
   };
   try {

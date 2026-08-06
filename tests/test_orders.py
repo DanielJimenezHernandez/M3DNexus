@@ -140,3 +140,46 @@ class TestMargen:
     def test_coste_cero_no_revienta(self):
         m = order_margin(cost=None, price=50.0)
         assert m["profit"] == 50.0 and m["cost"] == 0.0
+
+
+class TestEstadoPorCopia:
+    def _st(self, copy_status, qty, live=None):
+        return item_status(printer_id=1, gcode_filename="p.gcode", quantity=qty,
+                           manual=None, live=live, history=None, copy_status=copy_status)
+
+    def test_cuenta_las_copias_hechas(self):
+        s = self._st(["done", "done", "pending"], 3)
+        assert s.status == ITEM_PARTIAL
+        assert s.printed == 2 and s.quantity == 3
+
+    def test_todas_hechas_es_impreso(self):
+        s = self._st(["done", "done"], 2)
+        assert s.status == ITEM_PRINTED
+        assert s.printed == 2
+
+    def test_alguna_marcada_imprimiendo(self):
+        s = self._st(["done", "printing", "pending"], 3)
+        assert s.status == ITEM_PRINTING
+        assert s.printed == 1
+
+    def test_todas_pendientes_en_cola(self):
+        assert self._st(["pending", "pending"], 2).status == ITEM_QUEUED
+
+    def test_manda_sobre_lo_deducido_de_moonraker(self):
+        # Aunque el historial dijera otra cosa, el marcado a mano gana.
+        s = item_status(printer_id=1, gcode_filename="p.gcode", quantity=4,
+                        manual=None, live=None,
+                        history=HistoryCount(ok=4),   # Moonraker dice 4 hechas
+                        copy_status=["done", "pending", "pending", "pending"])
+        assert s.printed == 1 and s.status == ITEM_PARTIAL
+
+    def test_progreso_en_vivo_si_casa_el_gcode(self):
+        live = LiveMatch(printer_id=1, filename="p.gcode", progress=0.5, eta_s=300)
+        s = self._st(["done", "printing"], 2, live=live)
+        assert s.status == ITEM_PRINTING
+        assert s.progress == 0.5 and s.eta_s == 300
+
+    def test_lista_mas_corta_que_cantidad(self):
+        # Se aumentó la cantidad y la lista aún no: lo que falta cuenta pendiente.
+        s = self._st(["done"], 3)
+        assert s.printed == 1 and s.quantity == 3 and s.status == ITEM_PARTIAL

@@ -228,6 +228,24 @@ def list_materials(db: Session = Depends(get_session)):
     return db.scalars(select(Material).order_by(Material.name)).all()
 
 
+@router.get("/materials/usage")
+def materials_usage(db: Session = Depends(get_session)):
+    """Por material: nº de impresiones y fecha de la última. En una consulta."""
+    rows = db.execute(
+        select(
+            PrintJob.material_id,
+            func.count(PrintJob.id),
+            func.max(PrintJob.end_time),
+        )
+        .where(PrintJob.material_id.is_not(None))
+        .group_by(PrintJob.material_id)
+    ).all()
+    return {
+        mid: {"count": cnt, "last_used": last}
+        for mid, cnt, last in rows
+    }
+
+
 @router.post("/materials", response_model=MaterialOut, status_code=201)
 def create_material(data: MaterialIn, db: Session = Depends(get_session)):
     material = Material(**data.model_dump())
@@ -606,6 +624,17 @@ def _compose_folder(base: str, folder: str | None) -> str | None:
     return f"{base}{sep}{folder}"
 
 
+def _sum_expenses(items) -> float:
+    """Suma los importes de una lista de gastos [{label, amount}]."""
+    total = 0.0
+    for e in items or []:
+        try:
+            total += float(e.get("amount") or 0)
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return total
+
+
 def _resolve_order(order: Order, live_by_printer, counts, db: Session, base: str = "") -> dict:
     """Serializa un pedido con el estado de cada pieza deducido de la realidad."""
     item_dicts, item_states = [], []
@@ -621,6 +650,7 @@ def _resolve_order(order: Order, live_by_printer, counts, db: Session, base: str
         st = item_status(
             printer_id=it.printer_id, gcode_filename=it.gcode_filename,
             quantity=it.quantity, manual=it.manual_status, live=lm, history=hc,
+            copy_status=it.copy_status,
         )
         item_states.append(st)
         # Coste estimado de la pieza (× cantidad), si hay datos en el historial.
@@ -632,13 +662,22 @@ def _resolve_order(order: Order, live_by_printer, counts, db: Session, base: str
                 if est.get("has_data"):
                     unit_cost = est["cost"]["total"]
                     total_cost += unit_cost * it.quantity
+        item_expenses = list(it.extra_expenses or [])
+        total_cost += _sum_expenses(item_expenses)
         item_dicts.append({
             "id": it.id, "label": it.label, "printer_id": it.printer_id,
             "printer_name": db.get(Printer, it.printer_id).name if it.printer_id else None,
             "gcode_filename": it.gcode_filename, "quantity": it.quantity,
             "manual_status": it.manual_status, "unit_cost": unit_cost,
+            "extra_expenses": item_expenses,
+            "copy_status": list(it.copy_status or []),
             **st.as_dict(),
         })
+
+    # Gastos extra a nivel de pedido, también son coste.
+    order_expenses = list(order.extra_expenses or [])
+    expenses_total = _sum_expenses(order_expenses)
+    total_cost += expenses_total
 
     ostatus = order_status(order.manual_status, item_states)
     return {
@@ -649,6 +688,8 @@ def _resolve_order(order: Order, live_by_printer, counts, db: Session, base: str
         "created_at": order.created_at, "status": ostatus,
         "folder": order.folder,
         "folder_path": _compose_folder(base, order.folder),
+        "deposit_amount": order.deposit_amount,
+        "extra_expenses": order_expenses,
         "items": item_dicts,
         "margin": order_margin(total_cost, order.agreed_price),
     }
@@ -688,7 +729,8 @@ def orders_queue(db: Session = Depends(get_session)):
                            live.get("progress") or 0.0, live.get("eta_s")) if live else None
             hc = counts.get((it.printer_id, it.gcode_filename)) if it.gcode_filename else None
             st = item_status(printer_id=it.printer_id, gcode_filename=it.gcode_filename,
-                             quantity=it.quantity, manual=it.manual_status, live=lm, history=hc)
+                             quantity=it.quantity, manual=it.manual_status, live=lm, history=hc,
+                             copy_status=it.copy_status)
             if st.status in (ITEM_PRINTING, ITEM_QUEUED, ITEM_PARTIAL, ITEM_FAILED):
                 p = db.get(Printer, it.printer_id)
                 queue.setdefault(it.printer_id, {"printer": p.name if p else "—", "items": []})
@@ -714,13 +756,22 @@ def _apply_order(order: Order, data: OrderIn, db: Session) -> None:
     order.manual_status = data.manual_status
     order.notes = data.notes
     order.folder = data.folder
+    # El anticipo solo tiene sentido si el pago es "anticipo"; si no, se limpia.
+    order.deposit_amount = data.deposit_amount if data.payment_status == "deposit" else None
+    order.extra_expenses = [e.model_dump() for e in data.extra_expenses] or None
     # Reemplazo completo de piezas: la UI manda la lista entera.
     order.items.clear()
     db.flush()
     for it in data.items:
         if it.printer_id is not None and not db.get(Printer, it.printer_id):
             raise HTTPException(404, f"Impresora {it.printer_id} no encontrada")
-        order.items.append(OrderItem(**it.model_dump()))
+        payload = it.model_dump()
+        payload["extra_expenses"] = payload["extra_expenses"] or None
+        # El estado por copia se recorta/rellena a la cantidad (por si cambió).
+        cs = (payload.get("copy_status") or [])[: it.quantity]
+        cs += ["pending"] * (it.quantity - len(cs))
+        payload["copy_status"] = cs if any(s != "pending" for s in cs) else None
+        order.items.append(OrderItem(**payload))
 
 
 @router.post("/orders", status_code=201)

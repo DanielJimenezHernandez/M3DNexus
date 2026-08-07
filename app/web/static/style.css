@@ -304,3 +304,30 @@ td a:hover { text-decoration: underline; }
 .copy-dot.cs-pending { background: var(--muted); opacity: .5; }
 .copy-dot.cs-printing { background: var(--accent); }
 .copy-dot.cs-done { background: var(--good); }
+.expense-row .exp-qty { max-width: 64px; text-align: center; }
+.expense-row .exp-x { font-size: 0.85rem; }
+.order-item .spacer { flex: 1; }
+.oi-cost { font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Edición inline del pedido: se expande dentro de su tarjeta. */
+.order-card > .order-edit { border-top: 1px solid var(--border); margin-top: 0.6rem; padding-top: 0.6rem; }
+
+/* Editor de pieza compacto: los 4 campos en una línea y menos alto. */
+.oi-editor { padding: 0.55rem 0.7rem; margin-bottom: 0.5rem; }
+.oi-editor .form-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.3rem 0.6rem; }
+.oi-editor .field { margin-bottom: 0.25rem; }
+.oi-editor .field > span { font-size: 0.7rem; margin-bottom: 0.1rem; }
+.oi-editor input, .oi-editor select { padding: 0.35rem 0.5rem; }
+.oi-editor .oi-copies-wrap { margin: 0.25rem 0; }
+.oi-editor .oi-expenses { margin: 0.2rem 0; }
+.oi-editor .row-actions { margin-top: 0.2rem; }
+.oi-editor .oi-status { font-size: 0.72rem; }
+
+/* Chips por copia interactivos en el tablero de pedidos. */
+.board-copies { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+.board-copies .copy-chip { width: 24px; height: 24px; font-size: 0.78rem; }
+.board-copies.dirty { outline: 1px dashed var(--warn); outline-offset: 3px; border-radius: 6px; }
+.board-save { padding: 0.2rem 0.6rem; }
+/* Selector de tiempo de post-procesado (horas + minutos). */
+.pp-time { display: flex; align-items: center; gap: 0.3rem; }
+.pp-time input { max-width: 56px; text-align: center; }

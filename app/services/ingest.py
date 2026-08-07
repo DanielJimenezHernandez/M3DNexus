@@ -146,6 +146,43 @@ def _resolve_energy(
         record.energy_kwh = energy
 
 
+def _borrow_energy(
+    session: Session,
+    record: PrintJob,
+    printer: Printer,
+    material: Material | None,
+) -> None:
+    """Estima la energía tomando la potencia media de otra impresora.
+
+    Para máquinas sin sensor propio (``ha_energy_entity`` vacío) pero con una
+    ``power_ref_printer_id``: se estima energía = potencia_media(referencia) ×
+    duración, y se marca el job como ``energy_estimated`` para no confundirlo con
+    una medida real. Solo actúa si aún no hay energía (medida o estimada).
+    """
+    # No se toca la energía MEDIDA; una estimación previa sí puede refrescarse
+    # (p.ej. si luego se resuelve el material y cambia la potencia por tipo).
+    if record.energy_kwh is not None and not record.energy_estimated:
+        return
+    if printer.ha_energy_entity or not printer.power_ref_printer_id:
+        return  # tiene sensor propio, o no referencia a nadie
+    duration_h = (record.print_duration_s or 0.0) / 3600.0
+    if duration_h <= 0:
+        # Job de 0 s (cancelado al instante): no hay nada que estimar. Se marca
+        # resuelto para que no se reprocese en cada sondeo.
+        if record.energy_kwh is None:
+            record.energy_unavailable = True
+        return
+
+    from .estimate import avg_power_w  # perezoso: estimate importa de este módulo
+
+    mtype = material.material_type if material else None
+    power_w, _ = avg_power_w(session, printer.power_ref_printer_id, mtype)
+    record.energy_kwh = round(power_w / 1000.0 * duration_h, 4)
+    record.energy_estimated = True
+    # Estimada, pero ya no es irrecuperable: hay un valor con el que costear.
+    record.energy_unavailable = False
+
+
 def apply_costs(
     record: PrintJob,
     printer: Printer,
@@ -168,7 +205,9 @@ def apply_costs(
             filament_price_per_kg=filament_price,
             print_duration_hours=duration_h,
             machine_purchase_price=printer.purchase_price or 0.0,
+            machine_resale_value=printer.resale_value or 0.0,
             machine_lifetime_hours=printer.lifetime_hours,
+            maintenance_per_hour=printer.maintenance_per_hour or 0.0,
         )
     )
 
@@ -177,6 +216,7 @@ def apply_costs(
     record.cost_energy = breakdown.energy
     record.cost_filament = breakdown.filament
     record.cost_depreciation = breakdown.depreciation
+    record.cost_maintenance = breakdown.maintenance
     record.cost_total = breakdown.total
     record.material_id = material.id if material else record.material_id
     # A revisar si falta energía, falta material, o el material no tiene precio
@@ -255,6 +295,9 @@ def ingest_job(
     # Energía desde HA en la ventana de la impresión (con margen opcional).
     retention_cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     _resolve_energy(record, printer, job, ha, padding_s, retention_cutoff)
+    # Si esta impresora no mide energía pero referencia a otra, se estima con la
+    # potencia media de esa (misma clase de máquina). Mejor que cobrar $0.
+    _borrow_energy(session, record, printer, material)
 
     apply_costs(record, printer, material, price_per_kwh, currency)
     session.flush()

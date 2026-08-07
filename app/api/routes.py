@@ -53,18 +53,15 @@ from ..schemas import (
 )
 from ..services.estimate import avg_power_w, estimate_cost, estimate_from_history
 from ..services.calibration import rescan_from_history
-from ..services.ingest import apply_costs, get_settings
+from ..services.ingest import _borrow_energy, apply_costs, get_settings
 from ..services.loaded import resolve_slots, set_slots
 from ..services.orca_import import apply_import, plan_import
 from ..services.orders import (
-    HistoryCount,
     ITEM_FAILED,
     ITEM_PARTIAL,
     ITEM_PRINTING,
     ITEM_QUEUED,
     LiveMatch,
-    _FINISHED_FAIL as _FINISHED_FAIL_ORDER,
-    _FINISHED_OK as _FINISHED_OK_ORDER,
     item_status,
     order_margin,
     order_status,
@@ -82,8 +79,19 @@ def list_printers(db: Session = Depends(get_session)):
     return db.scalars(select(Printer).order_by(Printer.name)).all()
 
 
+def _validate_power_ref(db: Session, ref_id: int | None, self_id: int | None) -> None:
+    """La impresora de referencia de energía debe existir y no ser ella misma."""
+    if ref_id is None:
+        return
+    if self_id is not None and ref_id == self_id:
+        raise HTTPException(422, "Una impresora no puede referenciarse a sí misma")
+    if not db.get(Printer, ref_id):
+        raise HTTPException(404, f"Impresora de referencia {ref_id} no encontrada")
+
+
 @router.post("/printers", response_model=PrinterOut, status_code=201)
 def create_printer(data: PrinterIn, db: Session = Depends(get_session)):
+    _validate_power_ref(db, data.power_ref_printer_id, None)
     printer = Printer(**data.model_dump())
     db.add(printer)
     db.commit()
@@ -96,6 +104,7 @@ def update_printer(printer_id: int, data: PrinterIn, db: Session = Depends(get_s
     printer = db.get(Printer, printer_id)
     if not printer:
         raise HTTPException(404, "Impresora no encontrada")
+    _validate_power_ref(db, data.power_ref_printer_id, printer_id)
     for k, v in data.model_dump().items():
         setattr(printer, k, v)
     db.commit()
@@ -449,8 +458,9 @@ def export_jobs_csv(db: Session = Depends(get_session)):
     w = csv.writer(buf)
     w.writerow([
         "fin", "impresora", "archivo", "estado", "duracion_h", "filamento_g",
-        "material", "energia_kwh", "coste_luz", "coste_filamento",
-        "coste_amortizacion", "coste_total", "moneda",
+        "material", "energia_kwh", "energia_estimada", "coste_luz",
+        "coste_filamento", "coste_amortizacion", "coste_mantenimiento",
+        "coste_total", "moneda",
     ])
     for j in rows:
         w.writerow([
@@ -462,8 +472,9 @@ def export_jobs_csv(db: Session = Depends(get_session)):
             round(j.filament_weight_g or 0, 1),
             mmap.get(j.material_id, ""),
             j.energy_kwh if j.energy_kwh is not None else "",
+            "sí" if j.energy_estimated else "",
             j.cost_energy, j.cost_filament, j.cost_depreciation,
-            j.cost_total, j.currency,
+            j.cost_maintenance, j.cost_total, j.currency,
         ])
     return Response(
         content=buf.getvalue(),
@@ -476,6 +487,8 @@ def _recompute(db: Session, job: PrintJob) -> None:
     price, currency = get_settings(db)
     printer = db.get(Printer, job.printer_id)
     material = db.get(Material, job.material_id) if job.material_id else None
+    if printer is not None:
+        _borrow_energy(db, job, printer, material)
     apply_costs(job, printer, material, price, currency)
 
 
@@ -586,30 +599,6 @@ def orca_import(payload: dict = Body(...), db: Session = Depends(get_session)):
 # --------------------------------------------------------------------------- #
 # Pedidos
 # --------------------------------------------------------------------------- #
-def _history_counts(db: Session) -> dict[tuple[int, str], HistoryCount]:
-    """Recuento de impresiones OK/fallidas por (impresora, gcode).
-
-    Se hace de una vez para todo el tablero, no una consulta por pieza.
-    """
-    counts: dict[tuple[int, str], HistoryCount] = {}
-    rows = db.execute(
-        select(
-            PrintJob.printer_id, PrintJob.filename,
-            PrintJob.status, PrintJob.end_time,
-        ).where(PrintJob.filename.is_not(None))
-    ).all()
-    for pid, fname, status, end in rows:
-        key = (pid, fname)
-        hc = counts.setdefault(key, HistoryCount())
-        if status in _FINISHED_OK_ORDER:
-            hc.ok += 1
-        elif status in _FINISHED_FAIL_ORDER:
-            hc.failed += 1
-        if end and (hc.last_end is None or end > hc.last_end):
-            hc.last_end = end
-    return counts
-
-
 def _compose_folder(base: str, folder: str | None) -> str | None:
     """Ruta local completa del pedido: <base>/<folder>, respetando el separador.
 
@@ -625,18 +614,18 @@ def _compose_folder(base: str, folder: str | None) -> str | None:
 
 
 def _sum_expenses(items) -> float:
-    """Suma los importes de una lista de gastos [{label, amount}]."""
+    """Suma los gastos [{label, amount, quantity}] como precio × cantidad."""
     total = 0.0
     for e in items or []:
         try:
-            total += float(e.get("amount") or 0)
+            total += float(e.get("amount") or 0) * int(e.get("quantity") or 1)
         except (TypeError, ValueError, AttributeError):
             pass
     return total
 
 
-def _resolve_order(order: Order, live_by_printer, counts, db: Session, base: str = "") -> dict:
-    """Serializa un pedido con el estado de cada pieza deducido de la realidad."""
+def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -> dict:
+    """Serializa un pedido con el estado de cada pieza (marcado a mano)."""
     item_dicts, item_states = [], []
     total_cost = 0.0
     for it in order.items:
@@ -646,10 +635,9 @@ def _resolve_order(order: Order, live_by_printer, counts, db: Session, base: str
                       progress=live.get("progress") or 0.0, eta_s=live.get("eta_s"))
             if live else None
         )
-        hc = counts.get((it.printer_id, it.gcode_filename)) if it.gcode_filename else None
         st = item_status(
             printer_id=it.printer_id, gcode_filename=it.gcode_filename,
-            quantity=it.quantity, manual=it.manual_status, live=lm, history=hc,
+            quantity=it.quantity, manual=it.manual_status, live=lm,
             copy_status=it.copy_status,
         )
         item_states.append(st)
@@ -678,6 +666,9 @@ def _resolve_order(order: Order, live_by_printer, counts, db: Session, base: str
     order_expenses = list(order.extra_expenses or [])
     expenses_total = _sum_expenses(order_expenses)
     total_cost += expenses_total
+    # Post-procesado del pedido: minutos totales × tarifa/hora.
+    postproc_cost = round((order.postproc_minutes or 0) / 60.0 * (order.postproc_rate or 0.0), 2)
+    total_cost += postproc_cost
 
     ostatus = order_status(order.manual_status, item_states)
     return {
@@ -689,6 +680,9 @@ def _resolve_order(order: Order, live_by_printer, counts, db: Session, base: str
         "folder": order.folder,
         "folder_path": _compose_folder(base, order.folder),
         "deposit_amount": order.deposit_amount,
+        "postproc_rate": order.postproc_rate,
+        "postproc_minutes": order.postproc_minutes or 0,
+        "postproc_cost": postproc_cost,
         "extra_expenses": order_expenses,
         "items": item_dicts,
         "margin": order_margin(total_cost, order.agreed_price),
@@ -701,12 +695,11 @@ def list_orders(db: Session = Depends(get_session)):
     from ..services.live import tracker
 
     live_by_printer = {s["printer_id"]: s for s in tracker.snapshot()}
-    counts = _history_counts(db)
     base = _get_setting(db, SETTING_ORDERS_FOLDER_BASE)
     orders = db.scalars(
         select(Order).order_by(Order.created_at.desc())
     ).unique().all()
-    return [_resolve_order(o, live_by_printer, counts, db, base) for o in orders]
+    return [_resolve_order(o, live_by_printer, db, base) for o in orders]
 
 
 @router.get("/orders/queue")
@@ -715,7 +708,6 @@ def orders_queue(db: Session = Depends(get_session)):
     from ..services.live import tracker
 
     live_by_printer = {s["printer_id"]: s for s in tracker.snapshot()}
-    counts = _history_counts(db)
     queue: dict = {}
     orders = db.scalars(select(Order)).unique().all()
     for o in orders:
@@ -727,9 +719,8 @@ def orders_queue(db: Session = Depends(get_session)):
             live = live_by_printer.get(it.printer_id)
             lm = LiveMatch(it.printer_id, live.get("filename") or "",
                            live.get("progress") or 0.0, live.get("eta_s")) if live else None
-            hc = counts.get((it.printer_id, it.gcode_filename)) if it.gcode_filename else None
             st = item_status(printer_id=it.printer_id, gcode_filename=it.gcode_filename,
-                             quantity=it.quantity, manual=it.manual_status, live=lm, history=hc,
+                             quantity=it.quantity, manual=it.manual_status, live=lm,
                              copy_status=it.copy_status)
             if st.status in (ITEM_PRINTING, ITEM_QUEUED, ITEM_PARTIAL, ITEM_FAILED):
                 p = db.get(Printer, it.printer_id)
@@ -758,6 +749,8 @@ def _apply_order(order: Order, data: OrderIn, db: Session) -> None:
     order.folder = data.folder
     # El anticipo solo tiene sentido si el pago es "anticipo"; si no, se limpia.
     order.deposit_amount = data.deposit_amount if data.payment_status == "deposit" else None
+    order.postproc_rate = data.postproc_rate
+    order.postproc_minutes = data.postproc_minutes
     order.extra_expenses = [e.model_dump() for e in data.extra_expenses] or None
     # Reemplazo completo de piezas: la UI manda la lista entera.
     order.items.clear()
@@ -783,7 +776,7 @@ def create_order(data: OrderIn, db: Session = Depends(get_session)):
     db.refresh(order)
     from ..services.live import tracker
     return _resolve_order(order, {s["printer_id"]: s for s in tracker.snapshot()},
-                          _history_counts(db), db, _get_setting(db, SETTING_ORDERS_FOLDER_BASE))
+                          db, _get_setting(db, SETTING_ORDERS_FOLDER_BASE))
 
 
 @router.put("/orders/{order_id}")
@@ -796,7 +789,7 @@ def update_order(order_id: int, data: OrderIn, db: Session = Depends(get_session
     db.refresh(order)
     from ..services.live import tracker
     return _resolve_order(order, {s["printer_id"]: s for s in tracker.snapshot()},
-                          _history_counts(db), db, _get_setting(db, SETTING_ORDERS_FOLDER_BASE))
+                          db, _get_setting(db, SETTING_ORDERS_FOLDER_BASE))
 
 
 @router.delete("/orders/{order_id}", status_code=204)
@@ -932,6 +925,7 @@ def stats(db: Session = Depends(get_session)):
             func.coalesce(func.sum(PrintJob.cost_energy), 0.0),
             func.coalesce(func.sum(PrintJob.cost_filament), 0.0),
             func.coalesce(func.sum(PrintJob.cost_depreciation), 0.0),
+            func.coalesce(func.sum(PrintJob.cost_maintenance), 0.0),
         )
     ).one()
 
@@ -969,7 +963,7 @@ def stats(db: Session = Depends(get_session)):
             continue
         power, source = avg_power_w(db, printer_id, mtype)
         elec_h = power / 1000.0 * price
-        machine_h = p.amortization_per_hour
+        machine_h = p.machine_per_hour
         cost_per_hour.append({
             "printer": p.name,
             "type": mtype or "Sin tipo",
@@ -1004,6 +998,7 @@ def stats(db: Session = Depends(get_session)):
             "energy": round(totals[4], 4),
             "filament": round(totals[5], 4),
             "depreciation": round(totals[6], 4),
+            "maintenance": round(totals[7], 4),
         },
         by_printer=[
             {"printer": r[0], "jobs": r[1], "cost": round(r[2], 4)}

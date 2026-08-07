@@ -77,16 +77,21 @@ class ItemStatus:
 
 
 def _from_copy_status(copy_status, qty, printer_id, gcode_filename, live) -> ItemStatus:
-    """Estado de la pieza a partir del estado marcado a mano por copia."""
+    """Estado de la pieza a partir del estado marcado a mano por copia.
+
+    El gcode NO determina si la pieza está hecha: dos pedidos pueden compartir
+    el mismo gcode. Solo cuenta lo que el usuario marca en los chips. Si una
+    copia está marcada 'imprimiendo' y ese gcode es el que está en la máquina,
+    se enriquece con el progreso real en vivo, pero eso no cambia el estado.
+    """
     cs = list(copy_status)[:qty]
     done = cs.count("done")
-    marked_printing = "printing" in cs
-    printing_live = (
-        live is not None
-        and live.printer_id == printer_id
-        and live.filename == gcode_filename
-    )
-    if marked_printing or (printing_live and done < qty):
+    if "printing" in cs:
+        printing_live = (
+            live is not None
+            and live.printer_id == printer_id
+            and live.filename == gcode_filename
+        )
         return ItemStatus(
             ITEM_PRINTING, printed=done, quantity=qty,
             progress=live.progress if printing_live else None,
@@ -104,59 +109,28 @@ def item_status(
     printer_id: int | None,
     gcode_filename: str | None,
     quantity: int,
-    manual: str | None,
-    live: LiveMatch | None,
-    history: HistoryCount | None,
+    manual: str | None = None,
+    live: LiveMatch | None = None,
     copy_status=None,
+    **_ignored,
 ) -> ItemStatus:
-    """Estado de una pieza a partir de su asignación, lo vivo y el historial.
+    """Estado de una pieza. Lo determina el usuario a mano, no el historial.
 
-    Prioridad: override manual de pieza (done/failed) > estado por copia marcado
-    a mano > deducción automática de Moonraker (vivo + historial).
+    El gcode solo sirve para estimar el coste, nunca para decidir si la pieza ya
+    se imprimió. Prioridad: override manual de pieza (done/failed) > estado por
+    copia marcado con los chips. Sin marcar nada, la pieza está en cola.
     """
     qty = max(1, quantity or 1)
-    hist = history or HistoryCount()
 
-    # Override manual: manda salvo el matiz de contar copias ya hechas.
     if manual == "done":
         return ItemStatus(ITEM_DONE, printed=qty, quantity=qty)
     if manual == "failed":
-        return ItemStatus(ITEM_FAILED, printed=hist.ok, quantity=qty,
-                          failed_seen=hist.failed)
-
-    # Estado por copia marcado a mano: manda sobre lo deducido.
-    if copy_status:
-        return _from_copy_status(copy_status, qty, printer_id, gcode_filename, live)
+        return ItemStatus(ITEM_FAILED, printed=0, quantity=qty)
 
     if not printer_id or not gcode_filename:
         return ItemStatus(ITEM_UNASSIGNED, printed=0, quantity=qty)
 
-    printing = (
-        live is not None
-        and live.printer_id == printer_id
-        and live.filename == gcode_filename
-    )
-
-    if hist.ok >= qty:
-        # Todas las copias hechas (y no hay una nueva en curso encima).
-        if printing:
-            return ItemStatus(ITEM_PRINTING, printed=hist.ok, quantity=qty,
-                              progress=live.progress, eta_s=live.eta_s,
-                              failed_seen=hist.failed)
-        return ItemStatus(ITEM_PRINTED, printed=hist.ok, quantity=qty,
-                          failed_seen=hist.failed)
-
-    if printing:
-        return ItemStatus(ITEM_PRINTING, printed=hist.ok, quantity=qty,
-                          progress=live.progress, eta_s=live.eta_s,
-                          failed_seen=hist.failed)
-    if hist.ok > 0:
-        return ItemStatus(ITEM_PARTIAL, printed=hist.ok, quantity=qty,
-                          failed_seen=hist.failed)
-    if hist.failed > 0:
-        return ItemStatus(ITEM_FAILED, printed=0, quantity=qty,
-                          failed_seen=hist.failed)
-    return ItemStatus(ITEM_QUEUED, printed=0, quantity=qty)
+    return _from_copy_status(copy_status or [], qty, printer_id, gcode_filename, live)
 
 
 # Prioridad para agregar: cuanto más avanzado o activo, mayor número.

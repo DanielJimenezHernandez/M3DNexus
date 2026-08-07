@@ -36,6 +36,13 @@ class Printer(Base):
     # Entidad de HA con la energía acumulada (kWh) del POW3 de esta impresora.
     ha_energy_entity: Mapped[str | None] = mapped_column(String, nullable=True)
     ha_power_entity: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Impresora de la que "toma prestada" la potencia media cuando esta no tiene
+    # su propio sensor (p.ej. una segunda Creality Hi sin POW3 usa la primera).
+    # Con esto sus impresiones estiman la luz en vez de cobrar $0. Es una
+    # ESTIMACIÓN (se marca el job como energy_estimated), no una medida.
+    power_ref_printer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printers.id"), nullable=True
+    )
 
     # Sufijos "@..." con los que OrcaSlicer nombra los perfiles de ESTA máquina.
     # Hacen falta varios porque el nombre se teclea a mano y acaba habiendo
@@ -52,12 +59,17 @@ class Printer(Base):
     # del último filamento impreso.
     loaded_materials: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
-    # Amortización al estilo hoja de cálculo: precio repartido entre los años
-    # de amortización × días activos al año × horas por día.
+    # Amortización al estilo hoja de cálculo: (precio − reventa) repartido entre
+    # los años de amortización × días activos al año × horas por día. La reventa
+    # es lo que esperas recuperar al venderla: solo se deprecia lo que pierdes.
     purchase_price: Mapped[float] = mapped_column(Float, default=0.0)
+    resale_value: Mapped[float] = mapped_column(Float, default=0.0)
     amortization_years: Mapped[float] = mapped_column(Float, default=2.0)
     active_days_per_year: Mapped[float] = mapped_column(Float, default=250.0)
     active_hours_per_day: Mapped[float] = mapped_column(Float, default=8.0)
+    # Coste de mantenimiento por hora de impresión (boquillas, correas, PEI,
+    # hotend, lubricante…). Va aparte de la amortización.
+    maintenance_per_hour: Mapped[float] = mapped_column(Float, default=0.0)
 
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -81,7 +93,19 @@ class Printer(Base):
     @property
     def amortization_per_hour(self) -> float:
         lh = self.lifetime_hours
-        return (self.purchase_price / lh) if lh else 0.0
+        if not lh:
+            return 0.0
+        depreciable = max(0.0, (self.purchase_price or 0.0) - (self.resale_value or 0.0))
+        return depreciable / lh
+
+    @property
+    def machine_per_hour(self) -> float:
+        """Coste total de máquina por hora: amortización + mantenimiento.
+
+        El mantenimiento se acota a >=0 igual que en ``compute_cost``, para que
+        un valor negativo no reste al coste/hora de las estadísticas.
+        """
+        return self.amortization_per_hour + max(0.0, self.maintenance_per_hour or 0.0)
 
 
 # Nivel de bobina. Cualitativo a propósito: se rellena a ojo, no se pesa.
@@ -156,6 +180,10 @@ class PrintJob(Base):
     # del recorder, o sin datos del sensor en su ventana). Evita reintentarlo en
     # cada sondeo: sin esta marca, un job sin energía se consulta para siempre.
     energy_unavailable: Mapped[bool] = mapped_column(default=False)
+    # True cuando la energía NO se midió sino que se estimó con la potencia media
+    # de otra impresora (ver Printer.power_ref_printer_id). El coste es válido
+    # pero aproximado; la UI lo distingue de una medida real.
+    energy_estimated: Mapped[bool] = mapped_column(default=False)
 
     # Snapshots de los parámetros usados al calcular (para reproducibilidad).
     tariff_per_kwh: Mapped[float] = mapped_column(Float, default=0.0)
@@ -164,6 +192,7 @@ class PrintJob(Base):
     cost_energy: Mapped[float] = mapped_column(Float, default=0.0)
     cost_filament: Mapped[float] = mapped_column(Float, default=0.0)
     cost_depreciation: Mapped[float] = mapped_column(Float, default=0.0)
+    cost_maintenance: Mapped[float] = mapped_column(Float, default=0.0)
     cost_total: Mapped[float] = mapped_column(Float, default=0.0)
 
     # True si faltan datos para un coste fiable (sin material, sin energía...).
@@ -290,6 +319,9 @@ class Order(Base):
     folder: Mapped[str | None] = mapped_column(String, nullable=True)
     # Anticipo recibido (solo relevante con payment_status = deposit).
     deposit_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Post-procesado del pedido: tarifa/hora del trabajador y minutos totales.
+    postproc_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    postproc_minutes: Mapped[int] = mapped_column(Integer, default=0)
     # Gastos extra del pedido en general (empaque, envío…): lista de
     # {label, amount}. Son costes, así que restan al margen.
     extra_expenses: Mapped[list | None] = mapped_column(JSON, nullable=True)

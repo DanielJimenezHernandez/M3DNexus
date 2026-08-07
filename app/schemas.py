@@ -15,10 +15,13 @@ class PrinterIn(BaseModel):
     ui_port: int = 80
     ha_energy_entity: str | None = None
     ha_power_entity: str | None = None
+    power_ref_printer_id: int | None = None
     purchase_price: float = 0.0
+    resale_value: float = 0.0
     amortization_years: float = 2.0
     active_days_per_year: float = 250.0
     active_hours_per_day: float = 8.0
+    maintenance_per_hour: float = 0.0
     multicolor: bool = False
     slot_count: int = 1
     enabled: bool = True
@@ -95,11 +98,13 @@ class JobOut(BaseModel):
     filament_weight_g: float
     material_id: int | None
     energy_kwh: float | None
+    energy_estimated: bool
     tariff_per_kwh: float
     currency: str
     cost_energy: float
     cost_filament: float
     cost_depreciation: float
+    cost_maintenance: float
     cost_total: float
     needs_review: bool
 
@@ -146,12 +151,18 @@ class AssignMaterialIn(BaseModel):
 
 class ExpenseIn(BaseModel):
     label: str
-    amount: float = 0.0
+    amount: float = 0.0      # precio por unidad
+    quantity: int = 1
 
     @field_validator("amount")
     @classmethod
     def _amount(cls, v: float) -> float:
         return max(0.0, v)
+
+    @field_validator("quantity")
+    @classmethod
+    def _qty(cls, v: int) -> int:
+        return max(1, v)
 
 
 class OrderItemIn(BaseModel):
@@ -198,8 +209,15 @@ class OrderIn(BaseModel):
     notes: str | None = None
     folder: str | None = None
     deposit_amount: float | None = None
+    postproc_rate: float | None = None
+    postproc_minutes: int = 0
     extra_expenses: list[ExpenseIn] = []
     items: list[OrderItemIn] = []
+
+    @field_validator("postproc_minutes")
+    @classmethod
+    def _ppm(cls, v: int) -> int:
+        return max(0, v)
 
     @field_validator("payment_status")
     @classmethod

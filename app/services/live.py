@@ -128,7 +128,9 @@ class LiveTracker:
                         filament_price_per_kg=material.price_per_kg if material else 0.0,
                         print_duration_hours=print_duration / 3600.0,
                         machine_purchase_price=p.purchase_price or 0.0,
+                        machine_resale_value=p.resale_value or 0.0,
                         machine_lifetime_hours=p.lifetime_hours,
+                        maintenance_per_hour=p.maintenance_per_hour or 0.0,
                     )
                 )
 

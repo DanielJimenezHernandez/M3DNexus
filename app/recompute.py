@@ -23,7 +23,12 @@ from sqlalchemy import select
 from .db import session_scope
 from .integrations.moonraker import MoonrakerJob
 from .models import Material, PrintJob, Printer
-from .services.ingest import _filament_weight, apply_costs, get_settings
+from .services.ingest import (
+    _borrow_energy,
+    _filament_weight,
+    apply_costs,
+    get_settings,
+)
 
 
 def main() -> int:
@@ -64,6 +69,9 @@ def main() -> int:
             cost_before += old_cost
 
             rec.filament_weight_g = new_weight
+            # Impresoras sin sensor propio que referencian a otra: estima la luz
+            # que faltara desde su histórico. No pisa energía ya medida.
+            _borrow_energy(session, rec, printer, material)
             apply_costs(rec, printer, material, price, currency)
 
             weight_after += new_weight

@@ -45,11 +45,15 @@ def _migrate() -> None:
         },
         "print_jobs": {
             "energy_unavailable": "ALTER TABLE print_jobs ADD COLUMN energy_unavailable BOOLEAN DEFAULT 0",
+            "energy_estimated": "ALTER TABLE print_jobs ADD COLUMN energy_estimated BOOLEAN DEFAULT 0",
+            "cost_maintenance": "ALTER TABLE print_jobs ADD COLUMN cost_maintenance FLOAT DEFAULT 0",
         },
         "orders": {
             "folder": "ALTER TABLE orders ADD COLUMN folder VARCHAR",
             "deposit_amount": "ALTER TABLE orders ADD COLUMN deposit_amount FLOAT",
             "extra_expenses": "ALTER TABLE orders ADD COLUMN extra_expenses JSON",
+            "postproc_rate": "ALTER TABLE orders ADD COLUMN postproc_rate FLOAT",
+            "postproc_minutes": "ALTER TABLE orders ADD COLUMN postproc_minutes INTEGER DEFAULT 0",
         },
         "order_items": {
             "extra_expenses": "ALTER TABLE order_items ADD COLUMN extra_expenses JSON",
@@ -63,6 +67,9 @@ def _migrate() -> None:
             "amortization_years": "ALTER TABLE printers ADD COLUMN amortization_years FLOAT DEFAULT 2",
             "active_days_per_year": "ALTER TABLE printers ADD COLUMN active_days_per_year FLOAT DEFAULT 250",
             "active_hours_per_day": "ALTER TABLE printers ADD COLUMN active_hours_per_day FLOAT DEFAULT 8",
+            "resale_value": "ALTER TABLE printers ADD COLUMN resale_value FLOAT DEFAULT 0",
+            "maintenance_per_hour": "ALTER TABLE printers ADD COLUMN maintenance_per_hour FLOAT DEFAULT 0",
+            "power_ref_printer_id": "ALTER TABLE printers ADD COLUMN power_ref_printer_id INTEGER",
             "ui_port": "ALTER TABLE printers ADD COLUMN ui_port INTEGER DEFAULT 80",
             "host": "ALTER TABLE printers ADD COLUMN host VARCHAR DEFAULT ''",
             "moonraker_port": "ALTER TABLE printers ADD COLUMN moonraker_port INTEGER DEFAULT 7125",
@@ -104,7 +111,8 @@ def _migrate() -> None:
         # y, por tanto, rompen los INSERT nuevos. Idempotente.
         removals = {
             "printers": ["expected_lifetime_hours", "maintenance_cost_per_hour"],
-            "print_jobs": ["cost_maintenance"],
+            # El post-procesado pasó de por-pieza a por-pedido.
+            "order_items": ["postproc_minutes"],
         }
         for table, drop_cols in removals.items():
             existing = {

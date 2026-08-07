@@ -87,7 +87,7 @@ async function loadDashboard() {
     .map(([l, v]) => `<div class="card"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
 
   const comp = s.cost_by_component;
-  const labels = { energy: "Electricidad", filament: "Filamento", depreciation: "Amortización" };
+  const labels = { energy: "Electricidad", filament: "Filamento", depreciation: "Amortización", maintenance: "Mantenimiento" };
   document.getElementById("component-table").innerHTML =
     `<tr><th>Componente</th><th class="num">Coste</th></tr>` +
     Object.keys(labels).map((k) => `<tr><td>${labels[k]}</td><td class="num">${money(comp[k])}</td></tr>`).join("");
@@ -108,6 +108,7 @@ async function loadDashboard() {
 const POWER_SOURCE_LABELS = {
   "impresora+tipo": "datos impresora+tipo", "tipo": "datos por tipo",
   "impresora": "datos por impresora", "defecto": "aún sin datos",
+  "impresora×térmico": "estimado por temperatura", "defecto×térmico": "estimado por temperatura",
 };
 function powerSourceLabel(src) { return POWER_SOURCE_LABELS[src] || src; }
 
@@ -166,7 +167,7 @@ async function renderLive() {
           <span>🔌 ${l.energy_kwh != null ? l.energy_kwh.toFixed(3) + " kWh" : "—"}</span>
           <span>🧵 ${l.filament_g.toFixed(0)} g ${l.material ? "(" + l.material + ")" : ""}</span>
         </div>
-        <div class="live-breakdown muted">luz ${money(c.energy)} · filam ${money(c.filament)} · amort ${money(c.depreciation)}</div>
+        <div class="live-breakdown muted">luz ${money(c.energy)} · filam ${money(c.filament)} · amort ${money(c.depreciation)}${c.maintenance ? " · mant " + money(c.maintenance) : ""}</div>
       </div>
     </div>`;
   }).join("");
@@ -276,7 +277,7 @@ function renderJobsTable(rows, pmap, mById) {
         <td><span class="pill ${j.status}">${j.status}</span>${review}</td>
         <td class="num">${fmtDur(j.print_duration_s)}</td>
         <td class="num">${j.filament_weight_g.toFixed(0)} g</td>
-        <td class="num">${j.energy_kwh != null ? j.energy_kwh.toFixed(3) + " kWh" : "—"}</td>
+        <td class="num"${j.energy_estimated ? ' title="Energía estimada con la potencia media de otra impresora (no medida)"' : ""}>${j.energy_kwh != null ? (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh" : "—"}</td>
         <td><select data-job="${j.id}" class="job-mat">${matOpts(j.material_id)}</select></td>
         <td class="num"><strong>${money(j.cost_total)}</strong></td>
         <td class="row-actions">
@@ -332,9 +333,11 @@ const PRINTER_FIELDS = [
   ["ha_energy_entity", "Entidad energía HA (kWh)", "text", ""],
   ["ha_power_entity", "Entidad potencia HA (opcional)", "text", ""],
   ["purchase_price", "Precio de la impresora", "number", 0],
+  ["resale_value", "Valor de reventa estimado", "number", 0],
   ["amortization_years", "Tiempo amortización (años)", "number", 2],
   ["active_days_per_year", "Días activa al año", "number", 250],
   ["active_hours_per_day", "Horas por día", "number", 8],
+  ["maintenance_per_hour", "Mantenimiento /h", "number", 0],
 ];
 
 // URL de la interfaz Klipper: host de la impresora + el puerto de la UI.
@@ -466,9 +469,17 @@ function printerForm(p = {}) {
   const fields = PRINTER_FIELDS.map(([k, lbl, t, def]) =>
     `<label class="field"><span>${lbl}</span><input data-k="${k}" type="${t}" value="${p[k] ?? def ?? ""}" /></label>`).join("");
   const multi = p.multicolor === true;
+  // Desplegable de "energía prestada": otras impresoras, excluida ella misma.
+  const refOpts = `<option value="">— Mide su propia energía —</option>` +
+    printers.filter((o) => o.id !== p.id).map((o) =>
+      `<option value="${o.id}" ${p.power_ref_printer_id === o.id ? "selected" : ""}>${escHtml(o.name)}</option>`).join("");
   const form = el(`<div class="card" style="margin-top:1rem">
     <h2 style="margin-top:0">${p.id ? "Editar" : "Nueva"} impresora</h2>
     <div class="form-grid">${fields}</div>
+    <div class="muted" id="pf-amort-hint" style="margin:.2rem 0 .6rem"></div>
+    <label class="field"><span>Energía: tomar prestada de…</span>
+      <select data-k="power_ref_printer_id" id="pf-powerref">${refOpts}</select>
+      <small class="muted">Solo si NO tiene sensor propio: estima la luz con la potencia media de otra máquina (marca sus impresiones como estimadas).</small></label>
     <label class="field"><span>Activa</span><select data-k="enabled">
       <option value="true" ${p.enabled !== false ? "selected" : ""}>Sí</option>
       <option value="false" ${p.enabled === false ? "selected" : ""}>No</option></select></label>
@@ -480,6 +491,25 @@ function printerForm(p = {}) {
     <div class="row-actions"><button class="btn" id="save-printer">Guardar</button>
       <button class="btn ghost" id="cancel-printer">Cancelar</button></div></div>`);
   host.appendChild(form);
+
+  // Pista en vivo del coste de máquina por hora: (precio − reventa)/vida +
+  // mantenimiento. Es el número que de verdad importa para el coste real.
+  const getF = (k) => parseFloat(form.querySelector(`[data-k="${k}"]`)?.value) || 0;
+  const hint = form.querySelector("#pf-amort-hint");
+  const refreshHint = () => {
+    const life = getF("amortization_years") * getF("active_days_per_year") * getF("active_hours_per_day");
+    const dep = life > 0 ? Math.max(0, getF("purchase_price") - getF("resale_value")) / life : 0;
+    const maint = getF("maintenance_per_hour");
+    hint.innerHTML = life > 0
+      ? `Coste de máquina ≈ <b>${money(dep + maint)}/h</b> (amortización ${money(dep)} + mantenimiento ${money(maint)}) · vida útil ${Math.round(life)} h`
+      : `Define años × días × horas para calcular el coste de máquina por hora.`;
+  };
+  ["purchase_price", "resale_value", "amortization_years", "active_days_per_year",
+   "active_hours_per_day", "maintenance_per_hour"].forEach((k) => {
+    const inp = form.querySelector(`[data-k="${k}"]`);
+    if (inp) inp.addEventListener("input", refreshHint);
+  });
+  refreshHint();
 
   const multiChk = form.querySelector("#pf-multi");
   const slotsWrap = form.querySelector("#pf-slots-wrap");
@@ -501,6 +531,8 @@ function printerForm(p = {}) {
     });
     body.multicolor = multiChk.checked;
     body.slot_count = multiChk.checked ? Math.min(16, Math.max(1, parseInt(slotsInput.value) || 1)) : 1;
+    // La referencia de energía es id de impresora o null (nunca cadena ni 0).
+    body.power_ref_printer_id = body.power_ref_printer_id ? +body.power_ref_printer_id : null;
     try {
       await api.send(p.id ? `/api/printers/${p.id}` : "/api/printers", p.id ? "PUT" : "POST", body);
       host.innerHTML = ""; toast("Guardado"); loadPrinters();
@@ -1095,7 +1127,8 @@ document.getElementById("q-estimate").addEventListener("click", async () => {
     currency = e.currency;
     const c = e.cost;
     const srcLabels = { "impresora+tipo": "impresora + material", "tipo": "por material",
-      "impresora": "por impresora", "defecto": "valor por defecto" };
+      "impresora": "por impresora", "defecto": "valor por defecto",
+      "impresora×térmico": "estimado por temperatura", "defecto×térmico": "estimado por temperatura" };
     const pw = "(" + (srcLabels[e.avg_power_source] || e.avg_power_source) + ")";
     host.innerHTML = `<table style="margin-top:0.8rem">
       <tr><td>Tiempo estimado</td><td class="num">${fmtDur(e.estimated_time_s)}</td></tr>
@@ -1104,6 +1137,7 @@ document.getElementById("q-estimate").addEventListener("click", async () => {
       <tr><td>Coste electricidad</td><td class="num">${money(c.energy)}</td></tr>
       <tr><td>Coste filamento</td><td class="num">${money(c.filament)}</td></tr>
       <tr><td>Amortización</td><td class="num">${money(c.depreciation)}</td></tr>
+      ${c.maintenance ? `<tr><td>Mantenimiento</td><td class="num">${money(c.maintenance)}</td></tr>` : ""}
       <tr><td><strong>Coste base por unidad</strong></td><td class="num"><strong>${money(c.total)}</strong></td></tr>
     </table>`;
     document.getElementById("q-base").value = c.total;
@@ -1259,17 +1293,21 @@ function renderOrders() {
 
   host.innerHTML = rows.map((o) => {
     const cur = o.currency || currency;
-    const items = o.items.map((it) => {
+    const items = o.items.map((it, idx) => {
       const printing = it.status === "printing";
       const prog = printing && it.progress != null
         ? `<div class="progress mini"><div class="bar" style="width:${Math.round(it.progress * 100)}%"></div><span>${Math.round(it.progress * 100)}%</span></div>` : "";
       const eta = printing && it.eta_s != null
         ? `<span class="muted oi-eta" title="tiempo restante estimado">⏳ ${fmtEta(it.eta_s)}</span>` : "";
       const copies = it.quantity > 1 ? ` <span class="muted">${it.printed}/${it.quantity}</span>` : "";
-      // Chips de solo lectura por copia, si se llevan a mano.
-      const copyChips = (it.copy_status && it.copy_status.length)
-        ? `<span class="copy-mini">${it.copy_status.map((s, i) =>
-            `<i class="copy-dot cs-${s}" title="Copia ${i + 1}: ${COPY_LABEL[s]}"></i>`).join("")}</span>` : "";
+      // Chips por copia interactivos: clic cicla el estado; el botón Guardar
+      // aparece al tocar alguno y persiste solo al pulsarlo.
+      const chips = Array.from({ length: it.quantity }, (_, ci) => {
+        const s = (it.copy_status && it.copy_status[ci]) || "pending";
+        return `<button type="button" class="copy-chip board-chip cs-${s}" data-s="${s}" title="Copia ${ci + 1}: ${COPY_LABEL[s]} (clic para cambiar)">${ci + 1}</button>`;
+      }).join("");
+      const copyChips = `<span class="board-copies" data-oid="${o.id}" data-idx="${idx}">${chips}
+        <button type="button" class="btn small board-save" hidden>Guardar</button></span>`;
       // El nombre del gcode que se imprime; la etiqueta (si hay) va encima.
       const gname = (it.gcode_filename || "").split("/").pop();
       const name = it.label
@@ -1282,6 +1320,10 @@ function renderOrders() {
         ? (ku ? `<a class="muted" href="${ku}" target="_blank" rel="noopener" title="Abrir ${escHtml(pr.name)}">${escHtml(it.printer_name)} ↗</a>`
               : `<span class="muted">${escHtml(it.printer_name)}</span>`)
         : `<span class="muted">—</span>`;
+      // Coste de imprimir la pieza: coste del gcode × cantidad.
+      const itemCost = it.unit_cost != null
+        ? `<span class="oi-cost muted" title="${money2(it.unit_cost, cur)} c/u × ${it.quantity}">💲${money2(it.unit_cost * it.quantity, cur)}</span>`
+        : "";
       return `<div class="order-item">
         <span class="oi-names">${name}</span>
         ${printer}
@@ -1289,6 +1331,8 @@ function renderOrders() {
         ${copyChips}
         ${eta}
         ${prog}
+        <span class="spacer"></span>
+        ${itemCost}
       </div>`;
     }).join("");
 
@@ -1299,20 +1343,25 @@ function renderOrders() {
     const deposit = o.payment_status === "deposit" && o.deposit_amount != null
       ? `<span class="muted" title="pendiente ${money2((o.agreed_price || 0) - o.deposit_amount, cur)}">· anticipo ${money2(o.deposit_amount, cur)}${o.agreed_price ? " / " + money2(o.agreed_price, cur) : ""}</span>`
       : "";
-    // Total de gastos extra del pedido (pedido + piezas), si hay.
-    const expTotal = (o.extra_expenses || []).reduce((a, e) => a + (e.amount || 0), 0)
-      + o.items.reduce((a, it) => a + (it.extra_expenses || []).reduce((b, e) => b + (e.amount || 0), 0), 0);
+    // Total de gastos extra del pedido (pedido + piezas), precio × cantidad.
+    const sumExp = (lst) => (lst || []).reduce((a, e) => a + (e.amount || 0) * (e.quantity || 1), 0);
+    const expTotal = sumExp(o.extra_expenses)
+      + o.items.reduce((a, it) => a + sumExp(it.extra_expenses), 0);
     const expenses = expTotal > 0
       ? `<span class="muted" title="empaque, velitas, etc.">· gastos ${money2(expTotal, cur)}</span>` : "";
+    // Post-procesado del pedido (mano de obra).
+    const ppMin = o.postproc_minutes || 0;
+    const postproc = o.postproc_cost > 0
+      ? `<span class="muted" title="${Math.floor(ppMin/60)}h ${ppMin%60}m × ${money2(o.postproc_rate, cur)}/h">· post-proc ${money2(o.postproc_cost, cur)}</span>` : "";
 
-    return `<div class="card order-card">
+    return `<div class="card order-card" id="ordercard-${o.id}">
       <div class="order-head">
         <strong>#${o.id} · ${escHtml(o.client)}</strong>
         ${statusPill(ORDER_STATUS, o.status)}
         <span class="pill" style="background:var(--panel-2)">${PAY_STATUS[o.payment_status] || o.payment_status}</span>
         ${dueLabel(o.due_date)}
         <span class="spacer"></span>
-        ${margin}${deposit}${expenses}
+        ${margin}${deposit}${expenses}${postproc}
         <button class="btn ghost small" data-edit-order="${o.id}">Editar</button>
         <button class="btn danger small" data-del-order="${o.id}">✕</button>
       </div>
@@ -1331,12 +1380,59 @@ function renderOrders() {
     }));
 
   host.querySelectorAll("[data-edit-order]").forEach((b) =>
-    b.addEventListener("click", () => orderForm(orders.find((o) => o.id == b.dataset.editOrder))));
+    b.addEventListener("click", () => {
+      const o = orders.find((x) => x.id == b.dataset.editOrder);
+      // El formulario se abre DENTRO de la propia tarjeta, en su sitio.
+      orderForm(o, document.getElementById(`ordercard-${o.id}`));
+    }));
   host.querySelectorAll("[data-del-order]").forEach((b) =>
     b.addEventListener("click", async () => {
       if (!confirm("¿Borrar pedido?")) return;
       await api.send(`/api/orders/${b.dataset.delOrder}`, "DELETE"); loadPedidos();
     }));
+
+  // Chips por copia interactivos en el tablero.
+  host.querySelectorAll(".board-copies").forEach((box) => {
+    const save = box.querySelector(".board-save");
+    box.querySelectorAll(".board-chip").forEach((chip) =>
+      chip.addEventListener("click", () => {
+        const next = COPY_CYCLE[(COPY_CYCLE.indexOf(chip.dataset.s) + 1) % 3];
+        chip.dataset.s = next;
+        chip.className = `copy-chip board-chip cs-${next}`;
+        chip.title = `Copia: ${COPY_LABEL[next]} (clic para cambiar)`;
+        box.classList.add("dirty");   // pausa el refresco automático
+        save.hidden = false;
+      }));
+    save.addEventListener("click", async () => {
+      const chips = [...box.querySelectorAll(".board-chip")].map((c) => c.dataset.s);
+      const o = orders.find((x) => x.id == box.dataset.oid);
+      const body = orderToBody(o);
+      body.items[+box.dataset.idx].copy_status = chips;
+      try {
+        await api.send(`/api/orders/${o.id}`, "PUT", body);
+        toast("Estado guardado"); loadPedidos();
+      } catch (e) { toast("Error: " + e.message); }
+    });
+  });
+}
+
+// Serializa un pedido del tablero al cuerpo que espera la API (para reenviarlo
+// al guardar un cambio puntual, p.ej. el estado de una pieza).
+function orderToBody(o) {
+  return {
+    client: o.client, description: o.description,
+    payment_status: o.payment_status, agreed_price: o.agreed_price,
+    currency: o.currency, due_date: o.due_date,
+    manual_status: o.manual_status, notes: o.notes, folder: o.folder,
+    deposit_amount: o.deposit_amount, postproc_rate: o.postproc_rate,
+    postproc_minutes: o.postproc_minutes || 0,
+    extra_expenses: o.extra_expenses || [],
+    items: o.items.map((it) => ({
+      label: it.label, printer_id: it.printer_id, gcode_filename: it.gcode_filename,
+      quantity: it.quantity, manual_status: it.manual_status,
+      copy_status: it.copy_status || [], extra_expenses: it.extra_expenses || [],
+    })),
+  };
 }
 
 function money2(v, cur) { return `${(v ?? 0).toFixed(2)} ${cur || currency}`; }
@@ -1375,15 +1471,19 @@ function expenseEditor(host, expenses) {
   const addRow = (e = {}) => {
     const row = el(`<div class="expense-row">
       <input class="exp-label" placeholder="Concepto (velitas, empaque…)" value="${escHtml(e.label || "")}">
-      <input class="exp-amount" type="number" step="0.01" min="0" placeholder="0.00" value="${e.amount ?? ""}">
+      <input class="exp-qty" type="number" min="1" step="1" title="Cantidad" value="${e.quantity ?? 1}">
+      <span class="exp-x muted">×</span>
+      <input class="exp-amount" type="number" step="0.01" min="0" placeholder="c/u" title="Precio por unidad" value="${e.amount ?? ""}">
       <button type="button" class="btn ghost small exp-del">✕</button>
     </div>`);
     row.querySelector(".exp-del").onclick = () => row.remove();
     host.insertBefore(row, add);   // siempre por encima del botón
   };
-  (expenses || []).forEach(addRow);
+  // El botón se añade ANTES de crear las filas: addRow lo usa como referencia
+  // en insertBefore, así que debe existir ya en host (si no, NotFoundError).
   add.onclick = () => addRow();
   host.appendChild(add);
+  (expenses || []).forEach(addRow);
 }
 
 // Lee las filas de gastos de un contenedor a [{label, amount}], sin las vacías.
@@ -1392,17 +1492,18 @@ function readExpenses(host) {
     .map((r) => ({
       label: r.querySelector(".exp-label").value.trim(),
       amount: parseFloat(r.querySelector(".exp-amount").value) || 0,
+      quantity: Math.max(1, parseInt(r.querySelector(".exp-qty").value) || 1),
     }))
     .filter((e) => e.label || e.amount);
 }
 
-function orderForm(o = {}) {
-  const host = document.getElementById("order-form-host");
+function orderForm(o = {}, host = document.getElementById("order-form-host")) {
+  const inline = host !== document.getElementById("order-form-host");  // dentro de la tarjeta
   const pay = o.payment_status || "pending";
   const oms = o.manual_status || "";
   const due = o.due_date ? new Date(o.due_date).toISOString().slice(0, 10) : "";
 
-  host.innerHTML = `<div class="card" style="margin-top:1rem">
+  host.innerHTML = `<div class="${inline ? "order-edit" : "card order-edit"}" style="${inline ? "" : "margin-top:1rem"}">
     <h2 style="margin-top:0">${o.id ? "Editar" : "Nuevo"} pedido ${o.id ? "#" + o.id : ""}</h2>
     <div class="form-grid">
       <label class="field"><span>Cliente</span><input id="of-client" value="${escHtml(o.client || "")}"></label>
@@ -1414,6 +1515,13 @@ function orderForm(o = {}) {
         <input type="number" step="0.01" id="of-deposit" value="${o.deposit_amount ?? ""}"></label>
       <label class="field"><span>Fecha de entrega</span><input type="date" id="of-due" value="${due}"></label>
       <label class="field"><span>Carpeta local (nº)</span><input id="of-folder" placeholder="${o.id || "p.ej. 112"}" value="${escHtml(o.folder || "")}"></label>
+      <label class="field"><span>Post-procesado: costo/hora</span>
+        <input type="number" step="0.01" min="0" id="of-postrate" placeholder="0.00" value="${o.postproc_rate ?? ""}"></label>
+      <label class="field"><span>Post-procesado: tiempo total</span>
+        <span class="pp-time">
+          <input type="number" min="0" id="of-post-h" value="${Math.floor((o.postproc_minutes || 0) / 60)}"> <span class="muted">h</span>
+          <input type="number" min="0" max="59" id="of-post-m" value="${(o.postproc_minutes || 0) % 60}"> <span class="muted">m</span>
+        </span></label>
       <label class="field"><span>Estado manual</span><select id="of-manual">
         <option value="">— automático —</option>
         <option value="on_hold" ${oms === "on_hold" ? "selected" : ""}>En espera</option>
@@ -1444,13 +1552,19 @@ function orderForm(o = {}) {
     host.querySelector("#of-deposit-wrap").hidden = e.target.value !== "deposit";
   });
 
-  host.querySelector("#of-add-item").onclick = () => addOrderItem(itemsHost, {});
-  host.querySelector("#of-cancel").onclick = () => (host.innerHTML = "");
-  host.querySelector("#of-save").onclick = () => saveOrder(o.id, host);
-  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  host.querySelector("#of-add-item").onclick = () => {
+    const row = addOrderItem(itemsHost, {}, true);   // nueva pieza arriba
+    row.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+  };
+  // Cancelar: si se edita dentro de la tarjeta, se recarga el tablero para
+  // restaurarla; si es un pedido nuevo (host de arriba), solo se vacía.
+  host.querySelector("#of-cancel").onclick = () =>
+    inline ? loadPedidos() : (host.innerHTML = "");
+  host.querySelector("#of-save").onclick = () => saveOrder(o.id, host, inline);
+  if (!inline) host.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
 }
 
-function addOrderItem(host, it) {
+function addOrderItem(host, it, prepend = false) {
   const row = el(`<div class="card oi-editor">
     <div class="form-grid">
       <label class="field"><span>Etiqueta (opcional)</span><input class="oi-label" value="${escHtml(it.label || "")}"></label>
@@ -1470,7 +1584,9 @@ function addOrderItem(host, it) {
     <div class="row-actions"><span class="oi-status muted"></span><span class="spacer"></span>
       <button type="button" class="btn ghost small oi-remove">Quitar pieza</button></div>
   </div>`);
-  host.appendChild(row);
+  // Las piezas nuevas (añadidas a mano) van arriba, para no scrollear; las que
+  // ya existen al abrir el pedido se añaden en orden.
+  if (prepend) host.prepend(row); else host.appendChild(row);
   expenseEditor(row.querySelector(".oi-exp-host"), it.extra_expenses);
   // Si la pieza ya trae gastos, se abre el bloque para que se vean.
   if (it.extra_expenses && it.extra_expenses.length) row.querySelector(".oi-expenses").open = true;
@@ -1491,6 +1607,7 @@ function addOrderItem(host, it) {
     if (host.children.length > 1) row.remove();
     else toast("Un pedido necesita al menos una pieza");
   };
+  return row;
 }
 
 // Buscador de gcode de la impresora elegida (en vivo, con fallback al historial).
@@ -1519,7 +1636,7 @@ async function loadOrderGcodes(row) {
     : "impresora apagada y sin historial";
 }
 
-async function saveOrder(id, host) {
+async function saveOrder(id, host, inline = false) {
   const items = [...host.querySelectorAll(".oi-editor")].map((row) => ({
     label: row.querySelector(".oi-label").value || null,
     printer_id: row.querySelector(".oi-printer").value ? +row.querySelector(".oi-printer").value : null,
@@ -1543,12 +1660,18 @@ async function saveOrder(id, host) {
     due_date: due ? new Date(due).toISOString() : null,
     manual_status: host.querySelector("#of-manual").value || null,
     folder: host.querySelector("#of-folder").value.trim() || null,
+    postproc_rate: host.querySelector("#of-postrate").value ? parseFloat(host.querySelector("#of-postrate").value) : null,
+    postproc_minutes: Math.max(0, (parseInt(host.querySelector("#of-post-h").value) || 0) * 60
+      + (parseInt(host.querySelector("#of-post-m").value) || 0)),
     extra_expenses: readExpenses(host.querySelector("#of-expenses")),
     items,
   };
   try {
     await api.send(id ? `/api/orders/${id}` : "/api/orders", id ? "PUT" : "POST", body);
-    host.innerHTML = ""; toast("Pedido guardado"); loadPedidos();
+    // Inline: loadPedidos reconstruye el tablero (y la tarjeta). Si no, se vacía
+    // el host de arriba del pedido nuevo.
+    if (!inline) host.innerHTML = "";
+    toast("Pedido guardado"); loadPedidos();
   } catch (e) { toast("Error: " + e.message); }
 }
 
@@ -1574,7 +1697,14 @@ document.getElementById("ped-filter").addEventListener("change", renderOrders);
 document.getElementById("ped-search").addEventListener("input", renderOrders);
 document.getElementById("ped-queue-toggle").addEventListener("click", toggleQueue);
 // Refresco en vivo del tablero mientras se mira (mismo ritmo que el dashboard).
-setInterval(() => { if (currentTab === "pedidos" && !document.getElementById("order-form-host").innerHTML) loadPedidos(); }, 8000);
+// Refresco del tablero mientras se mira; se salta si hay un formulario de
+// edición abierto (arriba o dentro de una tarjeta), para no borrarlo al vuelo.
+setInterval(() => {
+  if (currentTab !== "pedidos") return;
+  // No refrescar si hay un formulario abierto o cambios de chips sin guardar.
+  if (document.querySelector("#pedidos .order-edit, #pedidos .board-copies.dirty")) return;
+  loadPedidos();
+}, 8000);
 
 // --- Calibración de filamentos ----------------------------------------------
 // Matriz de qué filamento está afinado en qué impresora, y el import desde los

@@ -29,7 +29,7 @@ NOW = datetime(2026, 7, 24, tzinfo=timezone.utc)
 
 def _st(**kw):
     base = dict(printer_id=1, gcode_filename="pieza.gcode", quantity=1,
-                manual=None, live=None, history=None)
+                manual=None, live=None, copy_status=None)
     base.update(kw)
     return item_status(**base)
 
@@ -39,44 +39,21 @@ class TestEstadoDePieza:
         assert _st(printer_id=None).status == ITEM_UNASSIGNED
         assert _st(gcode_filename=None).status == ITEM_UNASSIGNED
 
-    def test_asignada_sin_historial_esta_en_cola(self):
+    def test_asignada_sin_marcar_esta_en_cola(self):
         assert _st().status == ITEM_QUEUED
 
-    def test_en_curso_si_casa_con_lo_vivo(self):
-        live = LiveMatch(printer_id=1, filename="pieza.gcode", progress=0.63, eta_s=600)
-        s = _st(live=live)
-        assert s.status == ITEM_PRINTING
-        assert s.progress == 0.63
-        assert s.eta_s == 600
+    def test_el_historial_no_influye_en_el_estado(self):
+        # El gcode solo sirve para estimar coste. Aunque ese gcode ya se haya
+        # impreso mil veces, la pieza sigue en cola hasta marcarla a mano.
+        assert _st(quantity=3, history=HistoryCount(ok=3)).status == ITEM_QUEUED
 
-    def test_lo_vivo_de_otra_impresora_no_cuenta(self):
-        live = LiveMatch(printer_id=2, filename="pieza.gcode", progress=0.5)
+    def test_lo_vivo_solo_no_marca_imprimiendo(self):
+        # Que el gcode esté en la máquina no basta: hay que marcar la copia.
+        live = LiveMatch(printer_id=1, filename="pieza.gcode", progress=0.63)
         assert _st(live=live).status == ITEM_QUEUED
 
-    def test_impresa_cuando_el_historial_cubre_la_cantidad(self):
-        s = _st(quantity=3, history=HistoryCount(ok=3))
-        assert s.status == ITEM_PRINTED
-        assert s.printed == 3 and s.quantity == 3
-
-    def test_parcial_si_faltan_copias(self):
-        s = _st(quantity=5, history=HistoryCount(ok=2))
-        assert s.status == ITEM_PARTIAL
-        assert s.printed == 2
-
-    def test_una_copia_nueva_en_curso_sobre_lo_ya_impreso(self):
-        # Ya salieron 2 de 5 y ahora se imprime otra: sigue 'imprimiendo'.
-        live = LiveMatch(printer_id=1, filename="pieza.gcode", progress=0.2)
-        s = _st(quantity=5, history=HistoryCount(ok=2), live=live)
-        assert s.status == ITEM_PRINTING
-        assert s.printed == 2
-
-    def test_fallida_si_solo_hay_fallos(self):
-        s = _st(history=HistoryCount(ok=0, failed=2))
-        assert s.status == ITEM_FAILED
-        assert s.failed_seen == 2
-
     def test_override_done_manda(self):
-        s = _st(quantity=4, manual="done", history=HistoryCount(ok=0))
+        s = _st(quantity=4, manual="done")
         assert s.status == ITEM_DONE
         assert s.printed == 4      # se da por completa
 

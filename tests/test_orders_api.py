@@ -64,7 +64,10 @@ class TestCrearYResolver:
         assert o["items"][0]["status"] == "queued"
         assert o["items"][0]["quantity"] == 2
 
-    def test_estado_impreso_se_deduce_del_historial(self, env):
+    def test_el_historial_del_gcode_NO_marca_impreso(self, env):
+        # Aunque el mismo gcode ya tenga impresiones (de otro pedido/pieza), la
+        # pieza sigue "en cola" hasta que se marquen copias a mano. El gcode solo
+        # sirve para estimar coste, no para decidir si esta pieza se imprimió.
         c, Local = env
         _seed_history(Local, 1, "tapa.gcode", ok=3)
         r = c.post("/api/orders", json={
@@ -72,18 +75,20 @@ class TestCrearYResolver:
             "items": [{"printer_id": 1, "gcode_filename": "tapa.gcode", "quantity": 3}],
         })
         o = r.json()
-        assert o["items"][0]["status"] == "printed"
-        assert o["items"][0]["printed"] == 3
-        assert o["status"] == "printed"
+        assert o["items"][0]["status"] == "queued"
+        assert o["items"][0]["printed"] == 0
+        assert o["status"] == "queued"
 
-    def test_parcial_si_faltan_copias(self, env):
+    def test_impreso_solo_cuando_se_marca_a_mano(self, env):
         c, Local = env
-        _seed_history(Local, 1, "tapa.gcode", ok=2)
+        _seed_history(Local, 1, "tapa.gcode", ok=3)   # historial irrelevante
         r = c.post("/api/orders", json={
             "client": "Juan",
-            "items": [{"printer_id": 1, "gcode_filename": "tapa.gcode", "quantity": 5}],
+            "items": [{"printer_id": 1, "gcode_filename": "tapa.gcode", "quantity": 3,
+                       "copy_status": ["done", "done", "done"]}],
         })
-        assert r.json()["items"][0]["status"] == "partial"
+        assert r.json()["items"][0]["status"] == "printed"
+        assert r.json()["items"][0]["printed"] == 3
 
     def test_override_manual_del_pedido_gana(self, env):
         c, Local = env
@@ -272,3 +277,79 @@ class TestEstadoPorCopia:
         r = c.post("/api/orders", json={"client": "A", "items": [
             {"printer_id": 1, "gcode_filename": "p.gcode", "copy_status": ["hecho"]}]})
         assert r.status_code == 422
+
+
+class TestGastosConCantidad:
+    def test_precio_por_cantidad(self, env):
+        # 4 velas a 12 + 4 bolsas a 3 = 48 + 12 = 60 de coste.
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "Monica", "agreed_price": 2200,
+            "extra_expenses": [
+                {"label": "velas", "amount": 12, "quantity": 4},
+                {"label": "bolsas celofán", "amount": 3, "quantity": 4}],
+            "items": []}).json()
+        assert o["margin"]["cost"] == 60.0
+        assert o["margin"]["profit"] == 2140.0
+        assert o["extra_expenses"][0]["quantity"] == 4
+
+    def test_cantidad_por_defecto_es_uno(self, env):
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "agreed_price": 100,
+            "extra_expenses": [{"label": "x", "amount": 25}]}).json()
+        assert o["margin"]["cost"] == 25.0
+        assert o["extra_expenses"][0]["quantity"] == 1
+
+    def test_cantidad_minima_uno(self, env):
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "agreed_price": 100,
+            "extra_expenses": [{"label": "x", "amount": 10, "quantity": 0}]}).json()
+        assert o["extra_expenses"][0]["quantity"] == 1
+        assert o["margin"]["cost"] == 10.0
+
+
+class TestPostProcesado:
+    def test_coste_por_minuto_a_nivel_de_pedido(self, env):
+        # Tarifa 120/h, 45 min totales del pedido → 0.75h × 120 = 90.
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "agreed_price": 500,
+            "postproc_rate": 120, "postproc_minutes": 45,
+            "items": [{"printer_id": 1, "gcode_filename": "x.gcode", "quantity": 4}]}).json()
+        assert o["postproc_cost"] == 90.0
+        assert o["postproc_minutes"] == 45
+        assert o["postproc_rate"] == 120
+        assert o["margin"]["cost"] == 90.0
+
+    def test_sin_tarifa_no_hay_coste(self, env):
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "postproc_minutes": 60,
+            "items": []}).json()
+        assert o["postproc_cost"] == 0.0
+
+    def test_sin_minutos_no_hay_coste(self, env):
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "postproc_rate": 100,
+            "items": []}).json()
+        assert o["postproc_cost"] == 0.0
+        assert o["postproc_minutes"] == 0
+
+    def test_minutos_negativos_a_cero(self, env):
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "postproc_rate": 60,
+            "postproc_minutes": -10, "items": []}).json()
+        assert o["postproc_minutes"] == 0
+
+    def test_postproc_y_gastos_se_suman_al_coste(self, env):
+        # 30 min a 60/h = 30 de postproc + 20 de gastos = 50 de coste.
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A", "agreed_price": 200,
+            "postproc_rate": 60, "postproc_minutes": 30,
+            "extra_expenses": [{"label": "empaque", "amount": 20}],
+            "items": []}).json()
+        assert o["margin"]["cost"] == 50.0
+        assert o["margin"]["profit"] == 150.0
+
+    def test_la_pieza_ya_no_lleva_postproc(self, env):
+        c, _ = env
+        o = c.post("/api/orders", json={"client": "A",
+            "items": [{"printer_id": 1, "gcode_filename": "x.gcode"}]}).json()
+        assert "postproc_minutes" not in o["items"][0]

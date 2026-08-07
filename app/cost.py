@@ -45,9 +45,14 @@ class CostInputs:
     filament_price_per_kg: float = 0.0
 
     print_duration_hours: float = 0.0
-    # Amortización: precio de la máquina repartido entre su vida útil (horas).
+    # Amortización: (precio − reventa) repartido entre la vida útil (horas). La
+    # reventa importa: una máquina cara conserva valor, así que no se deprecia
+    # su precio entero.
     machine_purchase_price: float = 0.0
+    machine_resale_value: float = 0.0
     machine_lifetime_hours: float = 0.0
+    # Mantenimiento (boquillas, correas, PEI, hotend…) por hora de impresión.
+    maintenance_per_hour: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,7 @@ class CostBreakdown:
     energy: float = 0.0
     filament: float = 0.0
     depreciation: float = 0.0
+    maintenance: float = 0.0
     total: float = 0.0
 
     def as_dict(self) -> dict:
@@ -75,13 +81,18 @@ def compute_cost(inp: CostInputs) -> CostBreakdown:
 
     depreciation = 0.0
     if inp.machine_lifetime_hours > 0:
-        rate = inp.machine_purchase_price / inp.machine_lifetime_hours
+        # No se amortiza por debajo de 0 aunque la reventa supere el precio.
+        depreciable = max(0.0, inp.machine_purchase_price - inp.machine_resale_value)
+        rate = depreciable / inp.machine_lifetime_hours
         depreciation = inp.print_duration_hours * rate
 
-    total = energy + filament + depreciation
+    maintenance = inp.print_duration_hours * max(0.0, inp.maintenance_per_hour)
+
+    total = energy + filament + depreciation + maintenance
     return CostBreakdown(
         energy=round(energy, 4),
         filament=round(filament, 4),
         depreciation=round(depreciation, 4),
+        maintenance=round(maintenance, 4),
         total=round(total, 4),
     )

@@ -318,9 +318,22 @@ Detectados en la revisión del **2026-07-22** contra la BD en producción
   reparó con `python -m app.recompute`: 68 registros, −3,39 kg de filamento
   fantasma, −881 $.
 
-- [ ] **Sin margen en la ventana de energía.** `energy_window_padding_seconds: 0`
-  deja fuera el pico de calentamiento de cama y hotend, que es la mayor parte
-  del consumo. Probar 60–120 s.
+- [x] ~~**Sin margen en la ventana de energía.**~~ *(diagnóstico descartado el
+  2026-08-08)* Se creía que `energy_window_padding_seconds: 0` dejaba fuera el
+  pico de calentamiento. **No es así:** en 603 de 610 jobs la ventana
+  `[start_time, end_time]` coincide *exactamente* con `total_duration`, que ya
+  incluye el precalentamiento (media 335 s, hasta 3,5 h). Añadir padding no
+  recuperaría nada y, con jobs consecutivos, **contaría dos veces** la misma
+  energía en el solape.
+
+- [ ] **~20 % del consumo no se atribuye a ninguna impresión.** Medido contra HA
+  en 7 días: de 11,35 kWh totales, 8,83 se reparten entre jobs y **2,52 kWh
+  quedan fuera** (Hi 12 %, K1SE 18 %, Voron 21 %, Ender 3V2 30 %, y la Ender
+  3v3 SE 0,725 kWh **sin una sola impresión**: encendida en reposo). Es
+  *standby*, precalentamiento manual antes de lanzar, enfriado y jobs no
+  registrados. Ese consumo es real y hoy no lo paga nadie. Opciones: repartirlo
+  como *overhead* entre los jobs (prorrateado por horas), o contabilizarlo como
+  coste fijo del taller visible en el dashboard. Requiere decidir el criterio.
 
 ### Fiabilidad
 

@@ -1995,7 +1995,15 @@ function orderForm(o = {}, host = document.getElementById("order-form-host")) {
   const due = o.due_date ? new Date(o.due_date).toISOString().slice(0, 10) : "";
 
   host.innerHTML = `<div class="${inline ? "order-edit" : "card order-edit"}" style="${inline ? "" : "margin-top:1rem"}">
-    <h2 style="margin-top:0">${o.id ? "Editar" : "Nuevo"} pedido ${o.id ? "#" + o.id : ""}</h2>
+    <!-- Cabecera fija: guardar/cancelar y las fotos siempre a mano, sin bajar
+         hasta el final en un pedido con muchas piezas. -->
+    <div class="form-head">
+      <h2>${o.id ? "Editar" : "Nuevo"} pedido ${o.id ? "#" + o.id : ""}</h2>
+      <span class="spacer"></span>
+      ${o.id ? `<button class="btn ghost small" id="of-add-photo">+ Foto</button>` : ""}
+      <button class="btn" id="of-save">Guardar</button>
+      <button class="btn ghost" id="of-cancel">Cancelar</button>
+    </div>
     <div class="form-grid">
       <label class="field"><span>Cliente</span><input id="of-client" value="${escHtml(o.client || "")}"></label>
       <label class="field"><span>Descripción</span><input id="of-desc" value="${escHtml(o.description || "")}"></label>
@@ -2033,15 +2041,20 @@ function orderForm(o = {}, host = document.getElementById("order-form-host")) {
       <div class="muted" style="font-size:.82rem;margin:.6rem 0 .3rem"><strong>Fotos del producto terminado</strong></div>
       <div id="of-photos">${o.id ? "" : '<span class="muted">Guarda el pedido primero para añadir fotos.</span>'}</div>
     </div>
-    <div class="row-actions" style="margin-top:1rem">
-      <button class="btn" id="of-save">Guardar</button>
-      <button class="btn ghost" id="of-cancel">Cancelar</button></div>
   </div>`;
 
   const itemsHost = host.querySelector("#of-items");
   (o.items && o.items.length ? o.items : [{}]).forEach((it) => addOrderItem(itemsHost, it));
   expenseEditor(host.querySelector("#of-expenses"), o.extra_expenses);
-  if (o.id) entityPhotoEditor(host.querySelector("#of-photos"), "order", o.id);
+  if (o.id) {
+    entityPhotoEditor(host.querySelector("#of-photos"), "order", o.id);
+    // El "+ Foto" de la cabecera dispara el de la galería (y baja hasta ella).
+    host.querySelector("#of-add-photo").addEventListener("click", () => {
+      const box = host.querySelector("#of-photos");
+      box.scrollIntoView({ block: "center", behavior: "smooth" });
+      box.querySelector("#ep-add")?.click();
+    });
+  }
 
   // El monto de anticipo solo se muestra si el pago es "anticipo".
   host.querySelector("#of-pay").addEventListener("change", (e) => {
@@ -2463,7 +2476,13 @@ function projPreview(partsHost) {
 function projectForm(pr = {}) {
   const host = document.getElementById("project-form-host");
   const form = el(`<div class="card" style="margin-top:1rem">
-    <h2 style="margin-top:0">${pr.id ? "Editar" : "Nuevo"} proyecto</h2>
+    <div class="form-head">
+      <h2>${pr.id ? "Editar" : "Nuevo"} proyecto</h2>
+      <span class="spacer"></span>
+      ${pr.id ? `<button type="button" class="btn ghost small pf-add-photo">+ Foto</button>` : ""}
+      <button class="btn pf-save">Guardar</button>
+      <button class="btn ghost pf-cancel">Cancelar</button>
+    </div>
     <div class="form-grid">
       <label class="field"><span>Nombre</span><input class="pf-name" value="${escHtml(pr.name || "")}"></label>
       <label class="field"><span>Peso del producto completo (g, báscula)</span><input type="number" step="0.1" min="0" class="pf-total" value="${pr.total_weight_g ?? ""}"></label>
@@ -2477,13 +2496,16 @@ function projectForm(pr = {}) {
       <div class="muted" style="font-size:.82rem;margin:.6rem 0 .3rem"><strong>Fotos del producto terminado</strong></div>
       <div class="pf-photos">${pr.id ? "" : '<span class="muted">Guarda el proyecto primero para añadir fotos.</span>'}</div>
     </div>
-    <div class="row-actions" style="margin-top:.6rem">
-      <button class="btn pf-save">Guardar</button>
-      <button class="btn ghost pf-cancel">Cancelar</button>
-    </div>
   </div>`);
   host.innerHTML = ""; host.appendChild(form);
-  if (pr.id) entityPhotoEditor(form.querySelector(".pf-photos"), "project", pr.id);
+  if (pr.id) {
+    entityPhotoEditor(form.querySelector(".pf-photos"), "project", pr.id);
+    form.querySelector(".pf-add-photo").addEventListener("click", () => {
+      const box = form.querySelector(".pf-photos");
+      box.scrollIntoView({ block: "center", behavior: "smooth" });
+      box.querySelector("#ep-add")?.click();
+    });
+  }
   const partsHost = form.querySelector(".pf-parts");
   (pr.parts && pr.parts.length ? pr.parts : [{}]).forEach((pt) => addProjectPart(partsHost, pt));
   partsHost.addEventListener("input", () => projPreview(partsHost));

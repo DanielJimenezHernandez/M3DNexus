@@ -210,3 +210,151 @@ def _estimate_from_meta(
         "has_data": bool(meta),
         "cost": breakdown.as_dict(),
     }
+
+
+# --- Estimación de proyecto multi-gcode / multi-máquina --------------------- #
+# Para prototipar u ofrecer sin fijar impresora: se promedia el coste/hora de la
+# FLOTA (luz + máquina) y se aplica al tiempo del gcode. La luz depende del
+# material (factor térmico); la máquina/hora (amortización + mantenimiento) no.
+
+
+def _machine_hours(session: Session) -> dict[int, float]:
+    """Horas reales de impresión por impresora (peso del promedio ponderado)."""
+    rows = session.execute(
+        select(
+            PrintJob.printer_id,
+            func.coalesce(func.sum(PrintJob.print_duration_s), 0.0),
+        ).group_by(PrintJob.printer_id)
+    ).all()
+    return {pid: (secs or 0.0) / 3600.0 for pid, secs in rows}
+
+
+def fleet_cost_per_hour(
+    session: Session,
+    material_type: str | None,
+    price_per_kwh: float,
+    weighting: str = "usage",
+) -> dict | None:
+    """Coste $/h promedio de la flota para un material, con rango min–max.
+
+    Por máquina: luz/h = potencia(material) × precio + máquina/h. El promedio
+    pondera por horas reales de impresión (``usage``) o es simple (``simple``).
+    Devuelve None si no hay impresoras habilitadas.
+    """
+    printers = session.scalars(
+        select(Printer).where(Printer.enabled == True)  # noqa: E712
+    ).all()
+    if not printers:
+        return None
+
+    hours = _machine_hours(session) if weighting == "usage" else {}
+    machines = []
+    for p in printers:
+        power, src = avg_power_w(session, p.id, material_type)
+        elec = power / 1000.0 * price_per_kwh
+        mach = p.machine_per_hour
+        machines.append({
+            "printer": p.name,
+            "power_w": power,
+            "power_source": src,
+            "elec_per_h": round(elec, 4),
+            "machine_per_h": round(mach, 4),
+            "total_per_h": round(elec + mach, 4),
+            "weight_h": round(hours.get(p.id, 0.0), 1) if weighting == "usage" else 1.0,
+        })
+
+    total_w = sum(m["weight_h"] for m in machines)
+    # Se pondera solo si se pidió "usage" Y hay horas registradas; si no, media
+    # plana (que la rama ponderada con pesos 1.0 también produce).
+    weighted = weighting == "usage" and total_w > 0
+    if total_w <= 0:  # sin uso registrado: media plana
+        n = len(machines)
+        avg = sum(m["total_per_h"] for m in machines) / n
+        avg_elec = sum(m["elec_per_h"] for m in machines) / n
+        avg_mach = sum(m["machine_per_h"] for m in machines) / n
+    else:
+        avg = sum(m["total_per_h"] * m["weight_h"] for m in machines) / total_w
+        avg_elec = sum(m["elec_per_h"] * m["weight_h"] for m in machines) / total_w
+        avg_mach = sum(m["machine_per_h"] * m["weight_h"] for m in machines) / total_w
+
+    lo = min(machines, key=lambda m: m["total_per_h"])
+    hi = max(machines, key=lambda m: m["total_per_h"])
+    return {
+        "avg_per_h": round(avg, 4),
+        "avg_elec_per_h": round(avg_elec, 4),
+        "avg_machine_per_h": round(avg_mach, 4),
+        "min_per_h": lo["total_per_h"],
+        "min_machine": lo["printer"],
+        "max_per_h": hi["total_per_h"],
+        "max_machine": hi["printer"],
+        "weighted": weighted,
+        "n_machines": len(machines),
+        "machines": machines,
+    }
+
+
+def estimate_project(
+    session: Session, files: list[dict], weighting: str = "usage"
+) -> dict:
+    """Estima el coste de un proyecto (varios gcodes, posibles materiales varios).
+
+    Cada archivo: {filename, weight_g, time_s, quantity, material_id|material_type}.
+    El coste de cada uno = filamento (peso × precio/kg) + coste/hora de flota ×
+    horas. Devuelve por archivo y totales, con rango min–max de la flota.
+    """
+    price, currency = get_settings(session)
+    fleet_cache: dict[str, dict | None] = {}
+    out_files = []
+    cost_total = cost_low = cost_high = 0.0
+
+    for f in files:
+        weight_g = float(f.get("weight_g") or 0.0)
+        time_h = float(f.get("time_s") or 0.0) / 3600.0
+        qty = max(1, int(f.get("quantity") or 1))
+        material = (
+            session.get(Material, f["material_id"]) if f.get("material_id") else None
+        )
+        mtype = material.material_type if material else (f.get("material_type") or None)
+        ppk = material.price_per_kg if material else 0.0
+
+        key = (mtype or "").upper()
+        if key not in fleet_cache:
+            fleet_cache[key] = fleet_cost_per_hour(session, mtype, price, weighting)
+        fleet = fleet_cache[key]
+
+        filament = weight_g / 1000.0 * ppk
+        if fleet:
+            unit = filament + fleet["avg_per_h"] * time_h
+            low = filament + fleet["min_per_h"] * time_h
+            high = filament + fleet["max_per_h"] * time_h
+        else:
+            unit = low = high = filament
+
+        cost_total += unit * qty
+        cost_low += low * qty
+        cost_high += high * qty
+        out_files.append({
+            "filename": f.get("filename"),
+            "weight_g": round(weight_g, 1),
+            "time_s": float(f.get("time_s") or 0.0),
+            "quantity": qty,
+            "material": material.name if material else mtype,
+            "material_type": mtype,
+            "filament": round(filament, 2),
+            "print_per_unit": round(unit - filament, 2),  # luz + máquina por ud.
+            "unit_cost": round(unit, 2),
+            "line_cost": round(unit * qty, 2),
+            "unit_low": round(low, 2),
+            "unit_high": round(high, 2),
+            "no_price": material is not None and ppk <= 0,
+        })
+
+    return {
+        "currency": currency,
+        "weighting": weighting,
+        "files": out_files,
+        "cost_total": round(cost_total, 2),
+        "cost_low": round(cost_low, 2),
+        "cost_high": round(cost_high, 2),
+        "fleet": fleet_cache,
+    }

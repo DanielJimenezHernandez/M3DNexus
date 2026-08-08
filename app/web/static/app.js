@@ -70,7 +70,7 @@ document.querySelectorAll("nav button").forEach((b) => {
 function loadTab(name) {
   ({ dashboard: loadDashboard, pedidos: loadPedidos, jobs: loadJobs,
      printers: loadPrinters, materials: loadMaterials, calibracion: loadCalibracion,
-     quote: loadQuote, cotizacion: loadCotizacion, settings: loadSettings })[name]?.();
+     quote: loadEstimacion, cotizacion: loadCotizacion, settings: loadSettings })[name]?.();
 }
 
 // --- Dashboard ---------------------------------------------------------------
@@ -1082,128 +1082,158 @@ function openColorModal() {
 }
 
 // --- Estimación + Presupuesto ------------------------------------------------
-let lastEstimate = null;
+// --- Estimación de producto (proyecto multi-gcode, promedio de flota) --------
+// El coste de imprimir se estima promediando el coste/hora de TODA la flota,
+// sin fijar máquina; el material (por archivo) marca el filamento y la potencia.
+let estFiles = [];      // {filename, weight_g, time_s, filament_type, thumb, material_id, quantity}
+let estResult = null;   // última respuesta de /api/estimate/project
+const vEst = (id) => document.getElementById(id).value;
 
-async function loadQuote() {
-  if (!printers.length) printers = await api.get("/api/printers");
-  const sel = document.getElementById("q-printer");
-  sel.innerHTML = printers.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
-  await loadQuoteFiles();
+async function loadEstimacion() {
+  await ensureRefs();   // materiales, para los desplegables
+  renderEstFiles();
+  recalcEstimate();
 }
 
-async function loadQuoteFiles() {
-  const pid = document.getElementById("q-printer").value;
-  const source = document.getElementById("q-source").value;
-  const fsel = document.getElementById("q-file");
-  fsel.innerHTML = `<option>cargando…</option>`;
-  const endpoint = source === "live"
-    ? `/api/printers/${pid}/files`               // en vivo desde Moonraker
-    : `/api/printers/${pid}/history-files`;      // desde la BD (offline)
-  let files = null;
-  try { files = await api.get(endpoint); } catch (e) { files = null; }
-  // Un 502 devuelve {detail:...} (no un array): la impresora está apagada/sin red.
-  if (!Array.isArray(files)) {
-    fsel.innerHTML = `<option value="">(impresora apagada o sin conexión)</option>`;
+// Preselección: material del tipo del gcode, priorizando uno que tenga precio.
+function pickMaterialForType(ftype) {
+  if (!ftype) return null;
+  const t = ftype.toUpperCase();
+  const same = materials.filter((m) => (m.material_type || "").toUpperCase() === t);
+  return (same.find((m) => m.price_per_kg > 0) || same[0] || {}).id ?? null;
+}
+
+function estMatOptions(sel) {
+  return `<option value="">— material —</option>` + materials.map((m) =>
+    `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${escHtml(m.name)}${m.price_per_kg > 0 ? "" : " (sin precio)"}</option>`).join("");
+}
+
+function renderEstFiles() {
+  const host = document.getElementById("est-files");
+  if (!estFiles.length) {
+    host.innerHTML = `<p class="muted">Sube uno o varios gcodes para empezar.</p>`;
     return;
   }
-  fsel.innerHTML = files.length
-    ? files.map((f) => `<option value="${f.path}">${f.path}</option>`).join("")
-    : `<option value="">${source === "live" ? "(sin gcodes en la impresora)" : "(sin impresiones en el historial)"}</option>`;
-}
-document.getElementById("q-printer").addEventListener("change", loadQuoteFiles);
-document.getElementById("q-source").addEventListener("change", loadQuoteFiles);
+  host.innerHTML = estFiles.map((f, i) => {
+    const thumb = f.thumb ? `<img class="est-thumb" src="${f.thumb}" alt="">` : `<div class="est-thumb"></div>`;
+    const w = f.weight_g != null ? f.weight_g.toFixed(0) + " g" : "— g";
+    const t = f.time_s ? fmtDur(f.time_s) : "— tiempo";
+    return `<div class="card est-row" data-i="${i}">
+      ${thumb}
+      <div class="est-info">
+        <div class="est-name" title="${escHtml(f.filename)}">${escHtml(f.filename)}</div>
+        <div class="muted">${w} · ${t}${f.filament_type ? " · " + escHtml(f.filament_type) : ""}</div>
+      </div>
+      <label class="field est-mat" style="margin:0"><span>Material</span>
+        <select data-est-mat>${estMatOptions(f.material_id)}</select></label>
+      <label class="field est-qty" style="margin:0"><span>Cantidad</span>
+        <input type="number" min="1" data-est-qty value="${f.quantity}"></label>
+      <div class="est-cost num" data-est-cost></div>
+      <button class="btn danger small" data-est-del title="Quitar">✕</button>
+    </div>`;
+  }).join("");
 
-document.getElementById("q-estimate").addEventListener("click", async () => {
-  const pid = document.getElementById("q-printer").value;
-  const file = document.getElementById("q-file").value;
-  const source = document.getElementById("q-source").value;
-  if (!file) return toast("Selecciona un archivo");
-  const host = document.getElementById("q-estimate-result");
-  host.innerHTML = `<p class="muted">Estimando…</p>`;
-  try {
-    const e = await api.get(`/api/printers/${pid}/estimate?filename=${encodeURIComponent(file)}&source=${source}`);
-    if (!e || !e.cost) throw new Error(e && e.detail ? e.detail : "sin datos");
-    lastEstimate = e;
-    currency = e.currency;
-    const c = e.cost;
-    const srcLabels = { "impresora+tipo": "impresora + material", "tipo": "por material",
-      "impresora": "por impresora", "defecto": "valor por defecto",
-      "impresora×térmico": "estimado por temperatura", "defecto×térmico": "estimado por temperatura" };
-    const pw = "(" + (srcLabels[e.avg_power_source] || e.avg_power_source) + ")";
-    host.innerHTML = `<table style="margin-top:0.8rem">
-      <tr><td>Tiempo estimado</td><td class="num">${fmtDur(e.estimated_time_s)}</td></tr>
-      <tr><td>Filamento</td><td class="num">${e.filament_g.toFixed(0)} g ${e.material ? "(" + e.material + ")" : "(sin material)"}</td></tr>
-      <tr><td>Energía (≈${e.avg_power_w} W ${pw})</td><td class="num">${e.energy_kwh} kWh</td></tr>
-      <tr><td>Coste electricidad</td><td class="num">${money(c.energy)}</td></tr>
-      <tr><td>Coste filamento</td><td class="num">${money(c.filament)}</td></tr>
-      <tr><td>Amortización</td><td class="num">${money(c.depreciation)}</td></tr>
-      ${c.maintenance ? `<tr><td>Mantenimiento</td><td class="num">${money(c.maintenance)}</td></tr>` : ""}
-      <tr><td><strong>Coste base por unidad</strong></td><td class="num"><strong>${money(c.total)}</strong></td></tr>
-    </table>`;
-    document.getElementById("q-base").value = c.total;
-  } catch (e) {
-    host.innerHTML = `<p class="muted">No se pudo estimar (¿impresora accesible? ¿gcode con metadatos?)</p>`;
-  }
-});
-
-function computeQuote() {
-  const base = parseFloat(document.getElementById("q-base").value) || 0;
-  const qty = Math.max(1, parseInt(document.getElementById("q-qty").value) || 1);
-  const labor = parseFloat(document.getElementById("q-labor").value) || 0;
-  const post = parseFloat(document.getElementById("q-post").value) || 0;
-  const failure = parseFloat(document.getElementById("q-failure").value) || 0;
-  const margin = parseFloat(document.getElementById("q-margin").value) || 0;
-  const baseFail = base * (1 + failure / 100);          // recargo por fallo
-  const subtotal = baseFail + labor + post;             // + mano de obra y extras
-  const unit = subtotal * (1 + margin / 100);           // + margen
-  return { base, qty, labor, post, failure, margin, baseFail, subtotal, unit, total: unit * qty };
+  host.querySelectorAll(".est-row").forEach((row) => {
+    const i = +row.dataset.i;
+    row.querySelector("[data-est-mat]").addEventListener("change", (e) => {
+      estFiles[i].material_id = e.target.value ? +e.target.value : null; recalcEstimate();
+    });
+    row.querySelector("[data-est-qty]").addEventListener("input", (e) => {
+      estFiles[i].quantity = Math.max(1, parseInt(e.target.value) || 1); recalcEstimate();
+    });
+    row.querySelector("[data-est-del]").addEventListener("click", () => {
+      estFiles.splice(i, 1); renderEstFiles(); recalcEstimate();
+    });
+  });
 }
 
-function renderQuote(q) {
-  document.getElementById("q-quote-result").innerHTML = `<table style="margin-top:0.8rem">
-    <tr><td>Coste base</td><td class="num">${money(q.base)}</td></tr>
-    <tr><td>+ recargo fallo (${q.failure}%)</td><td class="num">${money(q.baseFail)}</td></tr>
-    <tr><td>+ mano de obra</td><td class="num">${money(q.labor)}</td></tr>
-    <tr><td>+ post-procesado</td><td class="num">${money(q.post)}</td></tr>
-    <tr><td>Subtotal por unidad</td><td class="num">${money(q.subtotal)}</td></tr>
-    <tr><td>+ margen (${q.margin}%)</td><td class="num">${money(q.unit)}</td></tr>
-    <tr><td><strong>Precio unitario</strong></td><td class="num"><strong>${money(q.unit)}</strong></td></tr>
-    <tr><td><strong>TOTAL (${q.qty} ud.)</strong></td><td class="num"><strong>${money(q.total)}</strong></td></tr>
+async function recalcEstimate() {
+  const costHost = document.getElementById("est-cost");
+  if (!estFiles.length) { costHost.innerHTML = ""; estResult = null; recalcSale(); return; }
+  const body = {
+    weighting: vEst("est-weighting"),
+    files: estFiles.map((f) => ({
+      filename: f.filename, weight_g: f.weight_g || 0, time_s: f.time_s || 0,
+      quantity: f.quantity, material_id: f.material_id,
+    })),
+  };
+  let d;
+  try { d = await api.send("/api/estimate/project", "POST", body); }
+  catch (e) { costHost.innerHTML = `<p class="muted">No se pudo estimar.</p>`; return; }
+  estResult = d; currency = d.currency;
+
+  d.files.forEach((fc, i) => {
+    const cell = document.querySelector(`.est-row[data-i="${i}"] [data-est-cost]`);
+    if (cell) cell.innerHTML = `${money(fc.unit_cost)}/u`
+      + `<div class="muted">×${fc.quantity} = ${money(fc.line_cost)}</div>`
+      + (fc.no_price ? `<span class="pill review">sin precio</span>` : "");
+  });
+
+  const spread = d.cost_high > d.cost_low + 0.005;
+  costHost.innerHTML = `<div class="card">
+    <div class="est-total-row">
+      <div><div class="label">Coste del producto (promedio de flota)</div>
+        <div class="value">${money(d.cost_total)}</div></div>
+      ${spread ? `<div class="muted">según máquina: ${money(d.cost_low)} – ${money(d.cost_high)}</div>` : ""}
+    </div>
+    ${estFleetNote(d)}
+  </div>`;
+  recalcSale();
+}
+
+function estFleetNote(d) {
+  const parts = Object.entries(d.fleet).filter(([, v]) => v).map(([k, v]) =>
+    `<b>${escHtml(k || "—")}</b> ${money(v.avg_per_h)}/h ${v.weighted ? "pond." : "simple"} (${v.n_machines} máq) · ${money(v.min_per_h)} ${escHtml(v.min_machine)} → ${money(v.max_per_h)} ${escHtml(v.max_machine)}`);
+  return parts.length ? `<div class="muted est-fleet">Coste/hora de flota — ${parts.join(" · ")}</div>` : "";
+}
+
+function recalcSale() {
+  const cost = estResult ? estResult.cost_total : 0;
+  const qty = Math.max(1, parseInt(vEst("est-qty")) || 1);
+  const rate = parseFloat(vEst("est-rate")) || 0;
+  const hours = parseFloat(vEst("est-hours")) || 0;
+  const postMin = parseFloat(vEst("est-postmin")) || 0;
+  const failure = parseFloat(vEst("est-failure")) || 0;
+  const margin = parseFloat(vEst("est-margin")) || 0;
+
+  const printing = cost * (1 + failure / 100);   // recargo por fallo/merma
+  const labor = hours * rate;
+  const post = (postMin / 60) * rate;            // post-procesado a la misma tarifa
+  const unitCost = printing + labor + post;
+  const unitPrice = unitCost * (1 + margin / 100);   // margen sobre TODO
+  const profitUnit = unitPrice - unitCost;
+
+  document.getElementById("est-sale").innerHTML = `<table style="margin-top:.8rem">
+    <tr><td>Coste de impresión${failure ? ` (+${failure}% fallo)` : ""}</td><td class="num">${money(printing)}</td></tr>
+    <tr><td>+ mano de obra (${hours} h × ${money(rate)}/h)</td><td class="num">${money(labor)}</td></tr>
+    <tr><td>+ post-procesado (${postMin} min)</td><td class="num">${money(post)}</td></tr>
+    <tr><td>Coste por unidad</td><td class="num">${money(unitCost)}</td></tr>
+    <tr><td>+ margen (${margin}%)</td><td class="num">${money(profitUnit)}</td></tr>
+    <tr><td><strong>Precio unitario</strong></td><td class="num"><strong>${money(unitPrice)}</strong></td></tr>
+    <tr><td><strong>TOTAL (${qty} ud.)</strong></td><td class="num"><strong>${money(unitPrice * qty)}</strong></td></tr>
+    <tr><td class="muted">Beneficio total</td><td class="num muted">${money(profitUnit * qty)}</td></tr>
   </table>`;
 }
-document.getElementById("q-calc").addEventListener("click", () => renderQuote(computeQuote()));
 
-document.getElementById("q-print").addEventListener("click", () => {
-  const q = computeQuote();
-  const s = appSettings || {};
-  const item = lastEstimate
-    ? (lastEstimate.filename || "").split("/").pop()
-    : "Trabajo de impresión 3D";
-
-  printDoc("Presupuesto", `
-    ${brandHead(s, "Impresión 3D", "Presupuesto")}
-    <div class="meta">
-      <span><strong>Trabajo:</strong> ${escHtml(item)}</span>
-      <span><strong>Fecha:</strong> ${new Date().toLocaleDateString()}</span>
-      <span><strong>Cantidad:</strong> ${q.qty}</span>
-    </div>
-    <table>
-      <tr><th>Concepto</th><th class="num">Importe</th></tr>
-      <tr><td>Coste base de fabricación</td><td class="num">${money(q.base)}</td></tr>
-      <tr><td>Recargo por fallo (${q.failure}%)</td><td class="num">${money(q.baseFail - q.base)}</td></tr>
-      <tr><td>Mano de obra</td><td class="num">${money(q.labor)}</td></tr>
-      <tr><td>Post-procesado y extras</td><td class="num">${money(q.post)}</td></tr>
-      <tr><td>Margen (${q.margin}%)</td><td class="num">${money(q.unit - q.subtotal)}</td></tr>
-    </table>
-    <table class="totals">
-      <tr><td>Precio unitario</td><td class="num">${money(q.unit)}</td></tr>
-      <tr><td>Cantidad</td><td class="num">${q.qty}</td></tr>
-      <tr class="grand"><td>Total</td><td class="num">${money(q.total)}</td></tr>
-    </table>
-    ${brandTerms(s)}
-    <div class="foot">${escHtml(s.company_name || "M3D Nexus")} — Transforma tus ideas en realidad con impresión 3D</div>
-  `);
+document.getElementById("est-add").addEventListener("click", () =>
+  document.getElementById("est-input").click());
+document.getElementById("est-input").addEventListener("change", async (e) => {
+  for (const file of [...e.target.files]) {
+    try {
+      const d = await parseGcode(file);
+      estFiles.push({
+        filename: d.filename, weight_g: d.filament_g, time_s: d.estimated_time_s,
+        filament_type: d.filament_type, thumb: d.thumbnail_uri,
+        material_id: pickMaterialForType(d.filament_type), quantity: 1,
+      });
+    } catch (err) { toast("No se pudo leer " + file.name + ": " + err.message); }
+  }
+  e.target.value = "";
+  renderEstFiles(); recalcEstimate();
 });
+document.getElementById("est-weighting").addEventListener("change", recalcEstimate);
+["est-qty", "est-rate", "est-hours", "est-postmin", "est-failure", "est-margin"].forEach((id) =>
+  document.getElementById(id).addEventListener("input", recalcSale));
 
 // --- Pedidos -----------------------------------------------------------------
 // El estado de impresión lo deduce el servidor cruzando cada gcode con lo que

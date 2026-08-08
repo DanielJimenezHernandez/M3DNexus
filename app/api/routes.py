@@ -47,11 +47,17 @@ from ..schemas import (
     OrderIn,
     PrinterIn,
     PrinterOut,
+    ProjectEstimateIn,
     SettingsIn,
     SettingsOut,
     StatsOut,
 )
-from ..services.estimate import avg_power_w, estimate_cost, estimate_from_history
+from ..services.estimate import (
+    avg_power_w,
+    estimate_cost,
+    estimate_from_history,
+    estimate_project,
+)
 from ..services.calibration import rescan_from_history
 from ..services.ingest import _borrow_energy, apply_costs, get_settings
 from ..services.loaded import resolve_slots, set_slots
@@ -227,6 +233,15 @@ def estimate_print(
         raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"No se pudo estimar: {exc}")
+
+
+@router.post("/estimate/project")
+def estimate_project_endpoint(
+    payload: ProjectEstimateIn, db: Session = Depends(get_session)
+):
+    """Estima un proyecto multi-gcode promediando la flota (sin fijar máquina)."""
+    files = [f.model_dump() for f in payload.files]
+    return estimate_project(db, files, payload.weighting)
 
 
 # --------------------------------------------------------------------------- #

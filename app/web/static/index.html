@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — coste de impresiones 3D</title>
-  <link rel="stylesheet" href="/style.css?v=48" />
+  <link rel="stylesheet" href="/style.css?v=49" />
 </head>
 <body>
   <header>
@@ -16,7 +16,7 @@
       <button data-tab="printers">Impresoras</button>
       <button data-tab="materials">Materiales</button>
       <button data-tab="calibracion">Calibración</button>
-      <button data-tab="quote">Presupuesto</button>
+      <button data-tab="quote">Estimación</button>
       <button data-tab="cotizacion">Cotización</button>
       <button data-tab="settings">Ajustes</button>
     </nav>
@@ -144,37 +144,37 @@
       <table id="cal-table"></table>
     </section>
 
-    <!-- Estimación + Presupuesto -->
+    <!-- Estimación de producto: proyecto multi-gcode, promedio de flota -->
     <section id="quote" class="tab">
-      <h2>1 · Estimar coste de un gcode (antes de imprimir)</h2>
-      <div class="card" style="max-width:680px">
-        <div class="form-grid">
-          <label class="field"><span>Impresora</span><select id="q-printer"></select></label>
-          <label class="field"><span>Origen</span><select id="q-source">
-            <option value="history">Historial (guardado, sin conexión)</option>
-            <option value="live">En la impresora (en vivo)</option>
+      <div class="toolbar">
+        <h2 style="margin:0">Estimación de producto</h2>
+        <span class="spacer"></span>
+        <label class="muted" style="display:flex;gap:.35rem;align-items:center">Promedio flota:
+          <select id="est-weighting">
+            <option value="usage">ponderado por uso</option>
+            <option value="simple">simple</option>
           </select></label>
-          <label class="field"><span>Archivo gcode</span><select id="q-file"></select></label>
-        </div>
-        <button class="btn" id="q-estimate">Estimar</button>
-        <div id="q-estimate-result"></div>
+        <button class="btn" id="est-add">Subir gcodes…</button>
+        <input type="file" id="est-input" accept=".gcode,.gco,.g" multiple hidden />
       </div>
+      <p class="muted">Un proyecto = uno o varios gcodes (pueden ser materiales distintos).
+        Se estima el coste promediando el coste/hora de tu flota, sin fijar máquina.
+        Elige material y cantidad por archivo.</p>
 
-      <h2>2 · Presupuesto / precio de venta</h2>
-      <div class="card" style="max-width:680px">
+      <div id="est-files"></div>
+      <div id="est-cost"></div>
+
+      <h2>Precio de venta</h2>
+      <div class="card" style="max-width:720px">
         <div class="form-grid">
-          <label class="field"><span>Coste base por unidad</span><input type="number" step="0.01" id="q-base" value="0" /></label>
-          <label class="field"><span>Cantidad</span><input type="number" min="1" id="q-qty" value="1" /></label>
-          <label class="field"><span>Mano de obra (por ud.)</span><input type="number" step="0.01" id="q-labor" value="0" /></label>
-          <label class="field"><span>Post-procesado / extras (por ud.)</span><input type="number" step="0.01" id="q-post" value="0" /></label>
-          <label class="field"><span>Recargo por fallo (%)</span><input type="number" step="1" id="q-failure" value="10" /></label>
-          <label class="field"><span>Margen de beneficio (%)</span><input type="number" step="1" id="q-margin" value="30" /></label>
+          <label class="field"><span>Cantidad (del producto)</span><input type="number" min="1" id="est-qty" value="1" /></label>
+          <label class="field"><span>Tarifa mano de obra (por hora)</span><input type="number" step="0.01" id="est-rate" value="0" /></label>
+          <label class="field"><span>Horas de mano de obra</span><input type="number" step="0.1" id="est-hours" value="0" /></label>
+          <label class="field"><span>Post-procesado (min)</span><input type="number" step="1" id="est-postmin" value="0" /></label>
+          <label class="field"><span>Recargo por fallo (%)</span><input type="number" step="1" id="est-failure" value="10" /></label>
+          <label class="field"><span>Margen de beneficio (%)</span><input type="number" step="1" id="est-margin" value="30" /></label>
         </div>
-        <div class="row-actions">
-          <button class="btn" id="q-calc">Calcular precio</button>
-          <button class="btn ghost" id="q-print">Imprimir / PDF</button>
-        </div>
-        <div id="q-quote-result"></div>
+        <div id="est-sale"></div>
       </div>
     </section>
 
@@ -265,6 +265,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=48"></script>
+  <script src="/app.js?v=49"></script>
 </body>
 </html>

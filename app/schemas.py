@@ -145,6 +145,30 @@ class SettingsIn(BaseModel):
         return v
 
 
+class ProjectFileIn(BaseModel):
+    filename: str | None = None
+    weight_g: float = 0.0
+    time_s: float = 0.0
+    quantity: int = 1
+    material_id: int | None = None
+    material_type: str | None = None
+
+    @field_validator("quantity")
+    @classmethod
+    def _qty(cls, v: int) -> int:
+        return max(1, v)
+
+
+class ProjectEstimateIn(BaseModel):
+    files: list[ProjectFileIn] = []
+    weighting: str = "usage"
+
+    @field_validator("weighting")
+    @classmethod
+    def _w(cls, v: str) -> str:
+        return v if v in ("usage", "simple") else "usage"
+
+
 class AssignMaterialIn(BaseModel):
     material_id: int | None
 

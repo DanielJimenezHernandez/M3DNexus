@@ -331,3 +331,15 @@ td a:hover { text-decoration: underline; }
 /* Selector de tiempo de post-procesado (horas + minutos). */
 .pp-time { display: flex; align-items: center; gap: 0.3rem; }
 .pp-time input { max-width: 56px; text-align: center; }
+
+/* Estimación de producto: filas por gcode. */
+.est-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.est-thumb { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; background: var(--border); flex: 0 0 auto; }
+.est-info { flex: 1 1 180px; min-width: 0; }
+.est-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.est-mat { flex: 0 0 210px; }
+.est-qty { flex: 0 0 92px; }
+.est-cost { flex: 0 0 130px; text-align: right; font-weight: 600; }
+.est-total-row { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+.est-total-row .value { font-size: 1.5rem; font-weight: 700; }
+.est-fleet { margin-top: 0.4rem; font-size: 0.8rem; }

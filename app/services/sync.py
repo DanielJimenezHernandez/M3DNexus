@@ -19,11 +19,35 @@ import time
 from ..config import get_config
 from ..db import session_scope
 from ..integrations.homeassistant import HomeAssistantClient
-from ..integrations.moonraker import MoonrakerClient
-from ..models import Printer
+from ..integrations.moonraker import MoonrakerClient, thumbnail_path
+from ..models import PrintJob, Printer
 from .ingest import get_autocreate_since, get_settings, ingest_job
 
 log = logging.getLogger(__name__)
+
+# Tope de tamaño de miniatura a guardar (las de gcode rondan 10 KB; 200 KB es
+# un cinturón de seguridad por si un slicer mete una enorme).
+THUMBNAIL_MAX_BYTES = 200 * 1024
+
+
+def store_thumbnail(client: MoonrakerClient, rec: PrintJob) -> bool:
+    """Descarga y guarda la miniatura del gcode del job (una sola vez).
+
+    Devuelve True si la guardó. Marca ``thumbnail_tried`` siempre, para no
+    reintentar en cada sondeo cuando el gcode ya no está en la impresora.
+    """
+    if rec.has_thumbnail or rec.thumbnail_tried:
+        return False
+    rec.thumbnail_tried = True
+    path = thumbnail_path(rec.filename, rec.raw_metadata)
+    if not path:
+        return False
+    data, _ctype = client.thumbnail(path)
+    if not data or len(data) > THUMBNAIL_MAX_BYTES:
+        return False
+    rec.thumbnail = data
+    rec.has_thumbnail = True
+    return True
 
 
 def _ha_client() -> HomeAssistantClient | None:
@@ -78,6 +102,11 @@ def sync_printer(printer_id: int, limit: int = 100) -> dict:
                 )
                 if rec is not None:
                     result["processed"] += 1
+                    # Miniatura para el listado (offline). Un intento por job.
+                    try:
+                        store_thumbnail(client, rec)
+                    except Exception:  # noqa: BLE001
+                        pass  # la miniatura es cosmética: nunca rompe la ingesta
             except Exception as exc:  # noqa: BLE001
                 log.exception("Fallo al ingerir job %s: %s", job.job_id, exc)
                 result["errors"] += 1

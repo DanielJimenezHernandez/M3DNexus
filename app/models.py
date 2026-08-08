@@ -199,6 +199,16 @@ class PrintJob(Base):
     needs_review: Mapped[bool] = mapped_column(default=False)
 
     raw_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Miniatura del gcode (PNG ~10 KB) guardada al ingerir, para verla en el
+    # listado aunque la impresora esté apagada o se borre el gcode. Se difiere:
+    # no se carga en las consultas del listado, solo bajo demanda por su endpoint.
+    thumbnail: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, deferred=True
+    )
+    has_thumbnail: Mapped[bool] = mapped_column(default=False)
+    # Ya se intentó bajar la miniatura (haya salido o no): evita reintentar en
+    # cada sondeo cuando el gcode ya no está en la impresora.
+    thumbnail_tried: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     computed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

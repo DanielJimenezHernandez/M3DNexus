@@ -347,3 +347,37 @@ td a:hover { text-decoration: underline; }
 /* Celda de material en Impresiones + selector de filamentos del gcode. */
 .mat-cell { display: flex; align-items: center; gap: 0.3rem; }
 .gcode-fils { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+
+/* Listado de impresiones estilo Mainsail: columna de miniatura. */
+#jobs-table td { vertical-align: middle; }
+.thumb-col { width: 46px; padding-right: 0; }
+.job-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; display: block; background: var(--border); }
+.job-thumb.ph { background: repeating-linear-gradient(45deg, var(--border), var(--border) 4px, transparent 4px, transparent 8px); opacity: 0.5; }
+.job-name { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Selector de filamento con fotos y filtros (modal en Impresiones). */
+.mat-pick-btn { display: inline-flex; align-items: center; gap: 0.3rem; max-width: 190px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mp-modal { max-width: 880px; display: flex; flex-direction: column; }
+.mp-top { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem; }
+.mp-top #mp-q { flex: 1; }
+.mp-filters { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.6rem; }
+.mp-frow { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+.mp-frow > .muted { width: 46px; font-size: 0.8rem; }
+.mp-chip { border: 1px solid var(--border); background: transparent; color: var(--text);
+  border-radius: 999px; padding: 0.12rem 0.55rem; font-size: 0.8rem; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 0.25rem; }
+.mp-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.mp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 0.5rem; overflow-y: auto; }
+.mp-card { display: flex; align-items: center; gap: 0.5rem; text-align: left; padding: 0.4rem;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2);
+  color: var(--text); cursor: pointer; }
+.mp-card:hover { border-color: var(--accent); }
+.mp-card.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.mp-photo { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; flex: 0 0 auto;
+  background: var(--border); }
+.mp-cinfo { min-width: 0; }
+.mp-cname { font-weight: 600; display: flex; align-items: center; gap: 0.3rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-cmeta { font-size: 0.76rem; }

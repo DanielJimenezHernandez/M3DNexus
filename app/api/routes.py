@@ -250,7 +250,18 @@ def estimate_project_endpoint(
 # --------------------------------------------------------------------------- #
 @router.get("/materials", response_model=list[MaterialOut])
 def list_materials(db: Session = Depends(get_session)):
-    return db.scalars(select(Material).order_by(Material.name)).all()
+    mats = db.scalars(select(Material).order_by(Material.name)).all()
+    # URL de la primera foto de bobina de cada material (para el selector con
+    # fotos), en UNA consulta batch en vez de una por material.
+    first_spool = dict(db.execute(
+        select(MaterialPhoto.material_id, func.min(MaterialPhoto.id))
+        .where(MaterialPhoto.kind == "spool")
+        .group_by(MaterialPhoto.material_id)
+    ).all())
+    for m in mats:
+        pid = first_spool.get(m.id)
+        m.photo_url = f"/api/materials/{m.id}/photos/{pid}" if pid else None
+    return mats
 
 
 @router.get("/materials/usage")
@@ -520,6 +531,19 @@ def assign_material(job_id: int, data: AssignMaterialIn, db: Session = Depends(g
     db.commit()
     db.refresh(job)
     return job
+
+
+@router.get("/jobs/{job_id}/thumbnail")
+def job_thumbnail(job_id: int, db: Session = Depends(get_session)):
+    """Sirve la miniatura guardada del gcode (desde la BD; funciona offline)."""
+    job = db.get(PrintJob, job_id)
+    if not job or not job.thumbnail:
+        raise HTTPException(404, "Sin miniatura")
+    return Response(
+        content=job.thumbnail,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @router.get("/jobs/{job_id}/filaments")

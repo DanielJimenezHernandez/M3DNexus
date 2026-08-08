@@ -258,34 +258,38 @@ function renderJobsTable(rows, pmap, mById) {
   const arrow = (k) => (jobsSort.key === k ? (jobsSort.dir === "asc" ? " ▲" : " ▼") : "");
   const th = (k, label, cls = "") =>
     `<th class="sortable ${cls}" data-sort="${k}">${label}${arrow(k)}</th>`;
-  const matOpts = (sel) => `<option value="">—</option>` +
-    materials.map((m) => `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${m.name}</option>`).join("");
 
   const header = `<tr>
-    ${th("end_time", "Fin")}${th("printer", "Impresora")}${th("filename", "Archivo")}
-    ${th("status", "Estado")}${th("print_duration_s", "Duración", "num")}
+    <th class="thumb-col"></th>
+    ${th("filename", "Archivo")}${th("printer", "Impresora")}
+    ${th("status", "Estado")}${th("end_time", "Fin")}${th("print_duration_s", "Duración", "num")}
     ${th("filament_weight_g", "Filam.", "num")}${th("energy_kwh", "Energía", "num")}
     <th>Material</th>${th("cost_total", "Coste", "num")}<th></th></tr>`;
 
   document.getElementById("jobs-table").innerHTML = header +
     (rows.length ? rows.map((j) => {
       const review = j.needs_review ? ` <span class="pill review">revisar</span>` : "";
+      const thumb = j.has_thumbnail
+        ? `<img class="job-thumb" src="/api/jobs/${j.id}/thumbnail" loading="lazy" alt=""
+             onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'job-thumb ph'}))">`
+        : `<div class="job-thumb ph"></div>`;
       return `<tr>
-        <td>${fmtDate(j.end_time)}</td>
-        <td>${pmap[j.printer_id] || j.printer_id}</td>
-        <td title="${j.filename || ""}">${(j.filename || "—").split("/").pop()}</td>
+        <td class="thumb-col">${thumb}</td>
+        <td class="job-name" title="${escHtml(j.filename || "")}">${escHtml((j.filename || "—").split("/").pop())}</td>
+        <td>${escHtml(pmap[j.printer_id] || String(j.printer_id))}</td>
         <td><span class="pill ${j.status}">${j.status}</span>${review}</td>
+        <td class="muted">${fmtDate(j.end_time)}</td>
         <td class="num">${fmtDur(j.print_duration_s)}</td>
         <td class="num">${j.filament_weight_g.toFixed(0)} g</td>
         <td class="num"${j.energy_estimated ? ' title="Energía estimada con la potencia media de otra impresora (no medida)"' : ""}>${j.energy_kwh != null ? (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh" : "—"}</td>
-        <td><div class="mat-cell"><select data-job="${j.id}" class="job-mat">${matOpts(j.material_id)}</select>
+        <td><div class="mat-cell">${jobMatButton(j, mById)}
           <button class="btn ghost small" data-gcode-fil="${j.id}" title="Filamentos del gcode (elegir cuál se usó / crear)">🧵</button></div></td>
         <td class="num"><strong>${money(j.cost_total)}</strong></td>
         <td class="row-actions">
           <button class="btn ghost small" data-recompute="${j.id}">↻</button>
           <button class="btn danger small" data-del-job="${j.id}">✕</button>
         </td></tr>`;
-    }).join("") : `<tr><td colspan="10" class="muted">Sin resultados con estos filtros.</td></tr>`);
+    }).join("") : `<tr><td colspan="11" class="muted">Sin resultados con estos filtros.</td></tr>`);
 
   document.querySelectorAll("#jobs-table th.sortable").forEach((h) =>
     h.addEventListener("click", () => {
@@ -294,12 +298,9 @@ function renderJobsTable(rows, pmap, mById) {
       else { jobsSort.key = k; jobsSort.dir = ["filename", "printer", "status"].includes(k) ? "asc" : "desc"; }
       applyJobsView();
     }));
-  document.querySelectorAll(".job-mat").forEach((sel) =>
-    sel.addEventListener("change", async (e) => {
-      const mid = e.target.value ? Number(e.target.value) : null;
-      await api.send(`/api/jobs/${e.target.dataset.job}/assign-material`, "POST", { material_id: mid });
-      toast("Material asignado"); loadJobs();
-    }));
+  document.querySelectorAll("[data-pick-open]").forEach((b) =>
+    b.addEventListener("click", () =>
+      openMaterialPicker(+b.dataset.pickOpen, b.dataset.current ? +b.dataset.current : null)));
   document.querySelectorAll("[data-recompute]").forEach((b) =>
     b.addEventListener("click", async () => {
       await api.send(`/api/jobs/${b.dataset.recompute}/recompute`, "POST");
@@ -340,6 +341,106 @@ async function pickGcodeFilament(btn) {
       toast("Filamento asignado"); loadJobs();
     }));
   cell.querySelector("[data-fil-cancel]").addEventListener("click", loadJobs);
+}
+
+// --- Selector de filamento con fotos y filtros (modal) -----------------------
+// Botón por fila que muestra el material actual (muestra de color + nombre) y
+// abre un modal para elegir entre toda la biblioteca, con foto de bobina y
+// filtros por tipo, marca y color.
+function jobMatButton(j, mById) {
+  const m = j.material_id != null ? mById[j.material_id] : null;
+  const inner = m
+    ? `${m.color_hex ? `<span class="swatch" style="background:${escHtml(m.color_hex)}"></span>` : ""}${escHtml(m.name)}`
+    : `<span class="muted">— material —</span>`;
+  return `<button class="btn ghost small mat-pick-btn" data-pick-open="${j.id}" data-current="${j.material_id ?? ""}">${inner}</button>`;
+}
+
+let matPickJob = null;
+const matPick = { type: new Set(), brand: new Set(), color: new Set(), q: "" };
+
+async function openMaterialPicker(jobId, currentId) {
+  matPickJob = jobId;
+  matPick.type.clear(); matPick.brand.clear(); matPick.color.clear(); matPick.q = "";
+  await ensureRefs();
+  const types = [...new Set(materials.map((m) => m.material_type).filter(Boolean))].sort();
+  const brands = [...new Set(materials.map((m) => m.brand).filter(Boolean))].sort();
+  const colors = [...new Set(materials.map((m) => m.color_hex).filter(Boolean))];
+  const chip = (dim, val, label, extra = "") =>
+    `<button class="mp-chip" data-dim="${dim}" data-val="${escHtml(val)}">${extra}${escHtml(label)}</button>`;
+
+  const ov = document.getElementById("mat-picker");
+  ov.innerHTML = `<div class="modal-box mp-modal">
+    <div class="mp-top">
+      <strong>Elegir filamento</strong>
+      <input type="search" id="mp-q" placeholder="Buscar nombre, marca o color…">
+      <button class="btn ghost small" id="mp-close">✕</button>
+    </div>
+    <div class="mp-filters">
+      <div class="mp-frow"><span class="muted">Tipo</span>${types.map((t) => chip("type", t, t)).join("")}</div>
+      <div class="mp-frow"><span class="muted">Marca</span>${brands.map((b) => chip("brand", b, b)).join("")}</div>
+      <div class="mp-frow"><span class="muted">Color</span>${colors.map((c) => chip("color", c, "", `<span class="swatch" style="background:${escHtml(c)}"></span>`)).join("")}</div>
+    </div>
+    <div class="mp-grid" id="mp-grid"></div>
+  </div>`;
+  ov.hidden = false;
+  renderMatPickGrid(currentId);
+
+  ov.querySelector("#mp-close").onclick = closeMaterialPicker;
+  ov.onclick = (e) => { if (e.target === ov) closeMaterialPicker(); };
+  ov.querySelector("#mp-q").addEventListener("input", (e) => {
+    matPick.q = e.target.value.toLowerCase().trim(); renderMatPickGrid(currentId);
+  });
+  ov.querySelectorAll(".mp-chip").forEach((c) =>
+    c.addEventListener("click", () => {
+      const set = matPick[c.dataset.dim];
+      set.has(c.dataset.val) ? set.delete(c.dataset.val) : set.add(c.dataset.val);
+      c.classList.toggle("on");
+      renderMatPickGrid(currentId);
+    }));
+}
+
+function matPickPass(m) {
+  const f = matPick;
+  if (f.type.size && !f.type.has(m.material_type)) return false;
+  if (f.brand.size && !f.brand.has(m.brand)) return false;
+  if (f.color.size && !f.color.has(m.color_hex)) return false;
+  if (f.q) {
+    const hay = ((m.name || "") + " " + (m.brand || "") + " " + (m.color || "")).toLowerCase();
+    if (!hay.includes(f.q)) return false;
+  }
+  return true;
+}
+
+function renderMatPickGrid(currentId) {
+  const grid = document.getElementById("mp-grid");
+  const list = materials.filter(matPickPass);
+  const card = (m) => {
+    const sel = m.id === currentId ? " sel" : "";
+    const img = m.photo_url
+      ? `<img class="mp-photo" src="${m.photo_url}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'mp-photo ph'}))">`
+      : `<div class="mp-photo ph" style="background:${escHtml(m.color_hex || "")}"></div>`;
+    const sw = m.color_hex ? `<span class="swatch" style="background:${escHtml(m.color_hex)}"></span>` : "";
+    const price = m.price_per_kg > 0 ? `${money(m.price_per_kg)}/kg` : `<span class="pill review">sin precio</span>`;
+    return `<button class="mp-card${sel}" data-pick="${m.id}">${img}
+      <div class="mp-cinfo">
+        <div class="mp-cname">${sw}${escHtml(m.name)}</div>
+        <div class="muted mp-cmeta">${escHtml(m.material_type || "")}${m.brand ? " · " + escHtml(m.brand) : ""} · ${price}</div>
+      </div></button>`;
+  };
+  grid.innerHTML =
+    `<button class="mp-card${currentId == null ? " sel" : ""}" data-pick=""><div class="mp-photo ph"></div>
+       <div class="mp-cinfo"><div class="mp-cname">— sin material —</div></div></button>`
+    + (list.length ? list.map(card).join("") : `<p class="muted" style="grid-column:1/-1">Ningún filamento con esos filtros.</p>`);
+  grid.querySelectorAll("[data-pick]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const mid = b.dataset.pick ? +b.dataset.pick : null;
+      await api.send(`/api/jobs/${matPickJob}/assign-material`, "POST", { material_id: mid });
+      closeMaterialPicker(); toast("Material asignado"); loadJobs();
+    }));
+}
+
+function closeMaterialPicker() {
+  document.getElementById("mat-picker").hidden = true;
 }
 
 // Listeners de los controles de filtro (estáticos, se registran una vez).

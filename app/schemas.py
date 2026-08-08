@@ -81,6 +81,8 @@ class MaterialOut(MaterialIn):
     model_config = ConfigDict(from_attributes=True)
     id: int
     auto_created: bool = False
+    # URL de la primera foto de bobina, si tiene (para el selector con fotos).
+    photo_url: str | None = None
 
 
 class JobOut(BaseModel):
@@ -107,6 +109,7 @@ class JobOut(BaseModel):
     cost_maintenance: float
     cost_total: float
     needs_review: bool
+    has_thumbnail: bool
 
 
 # Logo: data URI de imagen. Se valida la forma para que no pueda romper el

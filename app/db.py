@@ -47,6 +47,9 @@ def _migrate() -> None:
             "energy_unavailable": "ALTER TABLE print_jobs ADD COLUMN energy_unavailable BOOLEAN DEFAULT 0",
             "energy_estimated": "ALTER TABLE print_jobs ADD COLUMN energy_estimated BOOLEAN DEFAULT 0",
             "cost_maintenance": "ALTER TABLE print_jobs ADD COLUMN cost_maintenance FLOAT DEFAULT 0",
+            "thumbnail": "ALTER TABLE print_jobs ADD COLUMN thumbnail BLOB",
+            "has_thumbnail": "ALTER TABLE print_jobs ADD COLUMN has_thumbnail BOOLEAN DEFAULT 0",
+            "thumbnail_tried": "ALTER TABLE print_jobs ADD COLUMN thumbnail_tried BOOLEAN DEFAULT 0",
         },
         "orders": {
             "folder": "ALTER TABLE orders ADD COLUMN folder VARCHAR",

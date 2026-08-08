@@ -1,9 +1,16 @@
-# printcost
+# M3D Nexus
 
-Registro de impresiones 3D con **cálculo automático del coste por impresión**.
+Gestión de un taller de impresión 3D con **coste real medido**: registro
+automático de cada impresión, **pedidos** de clientes, **proyectos** de
+desarrollo de producto y **estimación** de precio antes de imprimir.
+
+> El proyecto nació como `printcost` y ese nombre sobrevive en los
+> **identificadores técnicos** del despliegue actual: el contenedor
+> (`docker exec printcost …`), la base de datos (`printcost.db`) y la carpeta
+> `/opt/printcost`. La herramienta se llama **M3D Nexus**.
 
 Cada impresora corre **Klipper + Moonraker** y tiene un **Sonoff POW3** midiendo
-consumo, centralizado en **Home Assistant**. `printcost` correlaciona ambas
+consumo, centralizado en **Home Assistant**. M3D Nexus correlaciona ambas
 fuentes: toma el historial de jobs de Moonraker y, para la ventana temporal de
 cada impresión, consulta a HA cuánta energía gastó ese enchufe. Con eso calcula
 el coste real (electricidad + filamento + amortización + mantenimiento).
@@ -15,10 +22,11 @@ el coste real (electricidad + filamento + amortización + mantenimiento).
             │                               │
             └───────────────┬───────────────┘
                             ▼
-                   printcost (FastAPI + SQLite)
+                  M3D Nexus (FastAPI + SQLite)
         "¿cuánta energía en [start,end]?" → coste → registro
                             ▼
-                   Web UI: dashboard, registro, ajustes
+     Web UI: dashboard · impresiones · pedidos/proyectos ·
+             estimación · cotización · materiales · calibración
 ```
 
 ## Cómo calcula el coste
@@ -29,12 +37,16 @@ Para cada job terminado (completado **o** fallado):
 |----------------|---------|
 | Electricidad   | `kWh de la impresión × precio/kWh` |
 | Filamento      | `gramos × precio/kg del material` |
-| Amortización   | `horas × (precio máquina / vida útil en horas)` |
-| Mantenimiento  | `horas × coste/hora` |
+| Amortización   | `horas × ((precio máquina − reventa) / vida útil en horas)` |
+| Mantenimiento  | `horas × coste/hora de la impresora` |
 
 - **kWh de la impresión** = `energía_acumulada(fin) − energía_acumulada(inicio)`
   del sensor POW3 en HA. Mide el consumo real de toda la impresora (calentar
   cama/hotend incluido).
+- **Amortización con reventa**: solo se deprecia lo que de verdad pierdes
+  (`precio − valor de reventa estimado`), repartido entre la vida útil
+  (`años × días activos/año × horas/día`). Una máquina que conserva valor no
+  carga su precio entero a cada pieza.
 - **Gramos** = el peso que el slicer mete en el gcode si está disponible; si no,
   se estima desde la longitud de filamento y la densidad del material.
 - Las impresiones falladas cuentan, pero **solo por lo que gastaron**: la
@@ -42,6 +54,24 @@ Para cada job terminado (completado **o** fallado):
   fracción que llegó a extruirse (`filament_used` / `filament_total` del
   slicer, acotada a [0, 1]). Un fallo a los cinco minutos no cobra la pieza
   entera. Los jobs completados usan el peso del slicer tal cual.
+
+### Cuando no hay energía medida
+
+Dos mecanismos evitan que una impresión sin sensor salga a coste de luz cero:
+
+- **Energía prestada.** Una impresora sin sensor propio puede referenciar a otra
+  (`power_ref_printer_id`, p.ej. una segunda Creality Hi apuntando a la primera):
+  su energía se estima como `potencia media de la referencia × duración` y el
+  job se marca `energy_estimated` (la UI lo muestra con `≈`). Nunca pisa una
+  medida real, y estos valores **se excluyen** del cálculo de potencias medias
+  para que el promedio no se derive de sí mismo.
+- **Factor térmico por material.** Si un material no tiene energía medida, su
+  consumo se estima escalando la base de **esa misma máquina** según sus
+  temperaturas (cama y boquilla sobre el ambiente): PLA 1.0, PETG ≈ 1.27,
+  ABS/ASA ≈ 1.54, TPU ≈ 0.81. Así PETG no sale igual que PLA sin haberlo medido.
+  Una medida real siempre gana al factor; y se prefiere la base propia de la
+  máquina antes que la medida de otra (una Voron cerrada no representa a una
+  Ender abierta).
 
 ## Puesta en marcha (Docker)
 
@@ -85,36 +115,51 @@ pip install -r requirements-dev.txt
 cp config.example.yaml config.yaml
 export CONFIG_PATH=config.yaml DB_PATH=./printcost.db HA_TOKEN=...
 uvicorn app.main:app --reload
-pytest            # tests del motor de costes
+pytest            # motor de costes, servicios y API (281 tests)
 ```
 
 La UI tiene sus propios tests. No hace falta node instalado:
 
 ```bash
-# Parser de gcode (sin dependencias)
-docker run --rm -v "$PWD":/w:ro -w /w node:20-slim node tests/gcode_parser.test.mjs
-
-# Aritmética de la cotización y generación del PDF (carga la UI real en jsdom)
+# Parser de gcode (sin dependencias; ojo: se ejecuta desde el repo montado)
 docker run --rm -v "$PWD":/w:ro -w /tmp node:20-slim sh -c \
-  "npm i --silent --no-save jsdom && cp /w/tests/quote_items.test.mjs . && \
-   PRINTCOST_ROOT=/w node quote_items.test.mjs"
+  "npm i --silent --no-save jsdom && NODE_PATH=/tmp/node_modules \
+   node /w/tests/gcode_parser.test.mjs"
+
+# Suites que cargan la UI real en jsdom (cotización, chips del tablero,
+# edición de pedidos). Cambia el nombre del fichero según la suite.
+docker run --rm -v "$PWD":/w:ro -w /tmp node:20-slim sh -c \
+  "npm i --silent --no-save jsdom && cp /w/tests/order_edit.test.mjs . && \
+   PRINTCOST_ROOT=/w node order_edit.test.mjs"
 ```
+
+Tras tocar `web/static/`, sube el `?v=` de `index.html` (cache-buster) antes de
+desplegar, o el navegador servirá la versión anterior.
 
 ## Estructura
 
 ```
 app/
   cost.py                 motor de costes (puro, testeado)
-  config.py  db.py  models.py
+  config.py  db.py  models.py  schemas.py
   integrations/
-    moonraker.py          lee el historial de jobs
+    moonraker.py          historial de jobs, archivos y miniaturas
     homeassistant.py      lee la energía por ventana temporal
   services/
     ingest.py             correlaciona job + energía → coste (upsert)
-    sync.py               sondeo periódico de todas las impresoras
+    sync.py               sondeo periódico + guardado de miniaturas
+    live.py               seguimiento de la impresión en curso
+    estimate.py           estimación previa, potencia media, coste/hora de flota
+    projects.py           coste real de producto por peso de báscula
+    orders.py             estado de pedidos y piezas, margen
+    filament.py           parseo de nombres de filamento (multi-material)
+    calibration.py  orca.py  orca_import.py  loaded.py
   api/routes.py           API REST
   web/static/             UI (HTML + JS vanilla)
-tests/test_cost.py
+  recompute.py            recálculo masivo del histórico          (CLI)
+  backfill_thumbnails.py  descarga miniaturas de gcodes ya registrados (CLI)
+  calibrate.py  debug_ha.py                                       (CLI)
+tests/                    pytest (motor, servicios y API) + *.test.mjs (UI)
 ```
 
 ## Decisiones y límites actuales
@@ -136,11 +181,26 @@ tests/test_cost.py
   (`tariff_per_kwh`) por reproducibilidad; para reescribirlo, `app.recompute`.
 - **Material por tipo:** se asigna el material activo cuyo tipo case con el del
   slicer; si no hay match, el job queda *a revisar* y puedes asignarlo a mano
-  desde la web (recalcula al instante).
+  desde la web (recalcula al instante). Lo asignado a mano queda marcado
+  `material_manual` y el sondeo **no lo re-resuelve** (clave en gcodes
+  multi-material, donde el auto-detector se quedaría con el primer filamento).
+- **Dos formas de costear, a propósito:**
+  - *Impresiones* → coste **medido** de un job concreto en su máquina concreta.
+  - *Proyectos* → coste **real de producto** con peso de báscula y coste/hora de
+    flota; sirve para calibrar cuánto se desvía lo estimado de lo medido.
+  - *Estimación* → coste **previsto** de gcodes aún sin imprimir, sin fijar
+    máquina (promedio/máximo/mínimo de flota) para poder cotizar.
+- **El estado de las piezas de un pedido es manual.** No se deduce del historial
+  del gcode: el mismo archivo puede usarse en varios pedidos, así que un
+  histórico previo marcaría como impreso algo que aún no lo está. Los chips por
+  copia son la fuente de verdad.
+- **Las miniaturas se guardan una sola vez por job.** Si la impresora está
+  apagada no se marca el intento (se reintenta al encenderla); si respondió pero
+  el gcode ya no está, se marca definitivo y no se vuelve a pedir.
 
 ## Convención de nombres de filamento
 
-`printcost` extrae **marca, tipo y color** del campo `filament_name` del gcode.
+M3D Nexus extrae **marca, tipo y color** del campo `filament_name` del gcode.
 Para que el parseo sea infalible, nombra tus presets de filamento en el laminador
 con este formato (el laminador añade ` @ impresora`, eso se ignora):
 
@@ -174,13 +234,42 @@ Cuando imprimes con un filamento que aún no existe en la app, se crea solo
 ## Funciones
 
 - **Registro automático** de cada impresión con su coste (luz + filamento +
-  amortización + mantenimiento), incluidas las falladas.
+  amortización + mantenimiento), incluidas las falladas. El listado va con
+  **miniatura del gcode** (estilo Mainsail), guardada en la BD al sincronizar
+  para que se vea **aunque la impresora esté apagada** o se borre el archivo.
 - **Coste en vivo**: tarjeta "Imprimiendo ahora" con potencia, kWh y coste
   acumulándose en tiempo real (`/api/live`, refresco cada 5 s).
-- **Estimar antes de imprimir**: elige un gcode de la impresora y calcula el
-  coste previsto. La potencia media se deriva de tu propio historial.
-- **Presupuesto / precio de venta**: sobre el coste estimado, añade recargo por
-  fallo, mano de obra, post-procesado y margen → precio final, con PDF/CSV.
+- **Pedidos de clientes**: tablero con estado por pieza (chips por copia,
+  marcados a mano), precio acordado y **margen a la vista**, anticipos, gastos
+  extra con cantidad, post-procesado (tarifa/hora × minutos), carpeta local del
+  pedido y cola por impresora. Cada pieza se despliega con su detalle (gcode,
+  material, tiempo, filamento, coste unitario y total) y su miniatura.
+- **Proyectos (desarrollo de producto)**: mismo tablero, otro propósito. Las
+  partes llevan el **peso real de báscula**, y el coste sale de
+  `material (peso × precio medio del tipo) + máquina (horas × coste/hora de
+  flota)`. Al indicar el **peso del producto ensamblado** se reconcilia contra la
+  suma de partes y se obtiene el **error %** y un **factor de calibración**
+  (báscula ÷ estimado) para corregir futuras estimaciones.
+- **Enlace impresiones ↔ pedidos/proyectos**: desde el registro, el botón
+  *Agregar a:* añade esa impresión como pieza de un pedido o parte de un
+  proyecto; cada impresión muestra un **badge** de a qué pedido/proyecto
+  pertenece. El nombre del gcode abre la **UI de la impresora** (Mainsail
+  `/files` o Fluidd `/#/jobs`, según `ui_type`) copiando el nombre al
+  portapapeles.
+- **Estimación de producto (multi-gcode, sin fijar máquina)**: sube uno o varios
+  gcodes —pueden ser materiales distintos— y calcula el coste promediando la
+  **flota**. La **base de coste** es elegible: *máximo* (protege precios, por
+  defecto), *promedio ponderado por uso real*, *promedio simple* o *mínimo*
+  (competitivo); siempre se muestra el rango min–max. Encima va el **precio de
+  venta**: cantidad, mano de obra (horas × tarifa), post-procesado, % de fallo y
+  margen sobre todo.
+- **Selector de filamento con fotos**: en el registro, un modal con la
+  biblioteca en tarjetas (foto de bobina o muestra de color) y filtros por tipo,
+  marca y color. Para gcodes **multi-material**, el botón 🧵 lista *todos* los
+  filamentos del archivo y deja elegir con cuál se imprimió, **creándolo** si no
+  existe. Lo elegido a mano se marca `material_manual` y el sondeo **no lo pisa**.
+- **Fotos del producto terminado** en pedidos y proyectos (hasta 8, reescaladas
+  en el navegador), con miniatura en la tarjeta.
 - **Cotización itemizada**: un documento con cabecera (cliente, envío, IVA,
   margen, tarifas de luz y operario) y **un ítem por impresión**. Cada ítem lleva
   su impresora, material, masa, tiempo y cantidad, así que una misma cotización
@@ -207,9 +296,12 @@ Cuando imprimes con un filamento que aún no existe en la app, se crea solo
   destapa las impresiones hechas con el perfil de otra máquina.
 - **Diagnóstico**: `python -m app.debug_ha` para depurar la conexión con HA.
 - **Mantenimiento**: `python -m app.recompute` re-deriva peso de filamento y
-  coste de *todo* el histórico desde `raw_metadata`. Úsalo cuando cambie la forma
-  de calcular una magnitud (`/api/jobs/{id}/recompute` solo rehace el coste a
-  partir del peso ya guardado). Acepta `--dry-run`.
+  coste de *todo* el histórico desde `raw_metadata`. Úsalo cuando cambies precios
+  de material, parámetros de amortización/mantenimiento o la forma de calcular
+  una magnitud (`/api/jobs/{id}/recompute` solo rehace el coste a partir del peso
+  ya guardado). Acepta `--dry-run`.
+  `python -m app.backfill_thumbnails` descarga las miniaturas de los gcodes ya
+  registrados (solo de impresoras encendidas; las apagadas se reintentan luego).
 
 ## Problemas conocidos
 
@@ -255,14 +347,20 @@ Detectados en la revisión del **2026-07-22** contra la BD en producción
   ninguna parte. **Fix pendiente:** banner en el dashboard cuando
   `home_assistant` sea `false`.
 
-- [ ] **El filtro «Solo a revisar» ya no discrimina.** Marca 460 de 468 jobs,
-  casi todos por energía que nunca llegará. Ahora que se sabe cuál es
-  irrecuperable, `needs_review` podría reservarse para lo accionable (falta
-  material o precio) y mostrar la energía perdida como una columna aparte.
+- [ ] **El filtro «Solo a revisar» no discrimina bien.** Marca 477 de 610 jobs
+  (2026-08-08), casi todos por energía que nunca llegará o materiales sin
+  precio. `needs_review` podría reservarse para lo accionable (falta material o
+  precio) y mostrar la energía perdida como una columna aparte.
 
-- [ ] **SQLite sin WAL.** Dos hilos de fondo escriben además de las rutas de
-  FastAPI. Añadir `PRAGMA journal_mode=WAL` al arranque para evitar
-  *database is locked*.
+- [ ] **Materiales sin precio.** 46 de 65 filamentos tienen `price_per_kg = 0`,
+  así que sus impresiones no cobran filamento y quedan *a revisar*. Se arregla
+  poniendo el precio (recalcula solo las suyas al vuelo).
+
+- [x] ~~**SQLite sin WAL.**~~ *(corregido el 2026-08-08)* Dos hilos de fondo
+  escriben además de las rutas de FastAPI, y el sondeo retiene el lock mientras
+  baja miniaturas y energía por red. Ahora el engine activa
+  `PRAGMA journal_mode=WAL` y `busy_timeout=30000`: los lectores no se bloquean
+  y una escritura concurrente espera en vez de fallar con *database is locked*.
 
 ### Interfaz
 
@@ -271,10 +369,11 @@ Detectados en la revisión del **2026-07-22** contra la BD en producción
   el navegador lo interpreta como hora **local**: todas las fechas de la UI
   aparecen corridas por el offset local.
 
-- [ ] **XSS almacenado.** `web/static/app.js` interpola nombres de archivo, de
-  material y los campos de empresa en `innerHTML` sin escapar (~30 sitios). Un
-  gcode llamado `<img onerror=…>` ejecuta script. Riesgo bajo con un solo
-  usuario, pero se arregla con un helper `esc()`.
+- [~] **XSS almacenado.** Había ~30 interpolaciones de nombres de archivo,
+  material y campos de empresa en `innerHTML` sin escapar. Se introdujo el
+  helper `escHtml()` y hoy se usa en ~107 sitios (todas las vistas nuevas:
+  pedidos, proyectos, estimación, selectores). **Queda pendiente** una pasada
+  final por las vistas antiguas para confirmar que no falta ninguna.
 
 ### Despliegue
 
@@ -284,8 +383,8 @@ Detectados en la revisión del **2026-07-22** contra la BD en producción
 - [ ] **Path traversal en el proxy de miniaturas.** `MoonrakerClient.thumbnail`
   usa `quote()`, que no escapa `/` ni `..`: `/api/thumbnail/1?path=../../…` llega
   tal cual a Moonraker. Depende de que Moonraker lo rechace.
-- [ ] **El proyecto no está bajo control de versiones** (hay `.gitignore` pero no
-  repo). `git init`.
+- [x] ~~**El proyecto no está bajo control de versiones.**~~ Repo git con remoto
+  en GitHub (`M3DNexus`), push con la clave de despliegue `~/.ssh/m3dnexus_deploy`.
 - [ ] **El contenedor corre como root** y no tiene `HEALTHCHECK`.
 
 ## Roadmap
@@ -293,5 +392,45 @@ Detectados en la revisión del **2026-07-22** contra la BD en producción
 - [ ] Push por WebSocket de Moonraker (ahora el tiempo real es por *polling*).
 - [ ] Tarifa por tramos / sensor de precio de HA (PVPC, mercado).
 - [ ] Integración con Spoolman para coste de filamento por bobina.
-- [ ] Miniaturas del gcode en el registro y en el presupuesto.
-- [ ] Potencia media configurable por impresora (hoy se deriva del historial).
+- [ ] Potencia media configurable por impresora (hoy se deriva del historial, y
+  si falta el material se escala por el factor térmico).
+- [ ] Temperaturas del factor térmico editables desde *Ajustes* (hoy son una
+  tabla fija en `services/estimate.py`).
+- [ ] Aplicar el **factor de calibración** de un proyecto (báscula ÷ estimado)
+  a las estimaciones futuras de esos gcodes.
+
+## Visión a futuro — local-first + catálogo de productos
+
+Rumbo acordado (2026-08-08): que M3D Nexus sea el **SW central** de gestión de
+proyectos, servicio de impresión y desarrollo de producto vendible, corriendo
+**nativo en Windows** con la **BD y los archivos en carpetas locales** (un
+contenedor en Proxmox no puede tocar el disco local del PC, y ahí hay límite de
+storage). Cada producto pasa a ser una **carpeta autocontenida = "master"
+reproducible**: sus gcodes, el 3MF de OrcaSlicer, calibraciones, fotos en
+original y la receta de coste. La BD queda como **índice**; lo pesado va a disco.
+
+**Modelo mental unificado:** pedidos, productos y proyectos son **la misma
+entidad** por debajo (partes + archivos + coste + fotos); solo cambia la
+categoría/etiqueta con que se ven. Lo que aplica a proyectos aplica a pedidos y
+viceversa.
+
+### Próximo paso (arrancar por aquí)
+
+- [ ] **Productizar rutas: BD + capa de archivos**, para seguir desarrollando
+  rápido. BD en carpeta local elegible; carpeta base de proyectos/pedidos; crear
+  la carpeta del proyecto y **guardar / listar / abrir en el Explorador** sus
+  gcodes, 3MF y calibraciones, ligados en la BD. Token de HA a Ajustes (hoy es
+  variable de entorno).
+
+### Después
+
+- [ ] Galería de fotos **en original, sin comprimir, en disco** + miniatura para
+  la UI (hoy son blobs reescalados en la BD) → usarlas para redes con un clic.
+- [ ] **Duplicar / replicar un proyecto con un clic**: clona la receta y copia
+  sus gcodes/3MF a la carpeta del nuevo proyecto.
+- [ ] Unificar pedidos / productos / proyectos como una sola entidad categorizada.
+- [ ] Empaquetado autocontenido: **PyInstaller + PyWebview** (ventana de app),
+  con **GitHub Actions** para el build de Windows (Mac/Linux opcional). Tauri
+  (instaladores firmados + auto-update) solo si se distribuye.
+- [ ] (Escalón mayor) Mandar el gcode a imprimir en la impresora vía Moonraker
+  desde el catálogo.

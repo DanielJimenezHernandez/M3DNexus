@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
     live = LiveLoop(interval=15)
     live.start()
     app.state.live_loop = live
-    log.info("printcost listo. HA=%s", cfg.ha_url)
+    log.info("M3D Nexus listo. HA=%s", cfg.ha_url)
     try:
         yield
     finally:
@@ -93,13 +93,27 @@ async def lifespan(app: FastAPI):
         live.stop()
 
 
-app = FastAPI(title="printcost", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="M3D Nexus", version="0.1.0", lifespan=lifespan)
 app.include_router(api_router)
 
 
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+# Rutas de la SPA: cada sección tiene su URL propia (/pedidos, /impresiones…).
+# La navegación en el navegador es con history.pushState —no recarga—, pero al
+# entrar directo o recargar (F5) el servidor tiene que devolver el index para
+# que el front resuelva la sección. Se registran una a una, y ANTES del mount de
+# estáticos, para no capturar /app.js ni /style.css con un comodín.
+SPA_PAGES = (
+    "dashboard", "trabajos", "impresiones", "impresoras", "materiales",
+    "calibracion", "estimacion", "cotizacion", "ajustes",
+    "pedidos",   # alias histórico de /trabajos
+)
+for _page in SPA_PAGES:
+    app.get(f"/{_page}", include_in_schema=False)(index)
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR), name="static")

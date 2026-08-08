@@ -56,6 +56,19 @@ function toast(msg) {
 
 // --- Navegación por pestañas -------------------------------------------------
 let currentTab = "dashboard";
+
+// Cada sección tiene su URL propia (/pedidos, /impresiones…). El id interno de
+// la sección no siempre coincide con la ruta, así que se mapean aquí. El
+// servidor devuelve el index para estas rutas, y aquí se resuelve cuál abrir.
+const TAB_ROUTES = {
+  dashboard: "dashboard", pedidos: "trabajos", jobs: "impresiones",
+  printers: "impresoras", materials: "materiales", calibracion: "calibracion",
+  quote: "estimacion", cotizacion: "cotizacion", settings: "ajustes",
+};
+const ROUTE_TABS = Object.fromEntries(Object.entries(TAB_ROUTES).map(([t, r]) => [r, t]));
+ROUTE_TABS.pedidos = "pedidos";   // alias histórico: /pedidos → Trabajos
+const tabFromPath = () => ROUTE_TABS[(location.pathname.split("/")[1] || "").toLowerCase()] || "dashboard";
+
 // Activa una pestaña en la UI (sin cargarla). Reutilizable para navegar por
 // código, p.ej. saltar de una pieza de un pedido a sus impresiones.
 function showTab(name) {
@@ -65,10 +78,58 @@ function showTab(name) {
   if (btn) btn.classList.add("active");
   currentTab = name;
   document.getElementById(name).classList.add("active");
+  document.body.classList.remove("side-open");   // en móvil, cierra el panel
 }
+
+// Navega a una sección: actualiza la URL (sin recargar) y carga sus datos.
+function navigate(name, push = true) {
+  const route = TAB_ROUTES[name];
+  if (!route) return;
+  if (push && location.pathname !== `/${route}`) {
+    history.pushState({ tab: name }, "", `/${route}`);
+  }
+  showTab(name);
+  loadTab(name);
+}
+
 document.querySelectorAll("nav button").forEach((b) => {
-  b.addEventListener("click", () => { showTab(b.dataset.tab); loadTab(b.dataset.tab); });
+  b.addEventListener("click", () => navigate(b.dataset.tab));
 });
+// Atrás/adelante del navegador.
+window.addEventListener("popstate", () => navigate(tabFromPath(), false));
+
+// Panel lateral: colapsar (escritorio) y abrir/cerrar (móvil). Se recuerda.
+document.getElementById("side-toggle").addEventListener("click", () => {
+  if (window.matchMedia("(max-width: 820px)").matches) {
+    document.body.classList.remove("side-open");
+    return;
+  }
+  const collapsed = document.body.classList.toggle("side-collapsed");
+  localStorage.setItem("sideCollapsed", collapsed ? "1" : "");
+});
+document.getElementById("side-open").addEventListener("click", () =>
+  document.body.classList.add("side-open"));
+if (localStorage.getItem("sideCollapsed")) document.body.classList.add("side-collapsed");
+
+// Salta a Materiales para arreglar un precio que falta: abre el editor de ese
+// filamento; si no se sabe cuál es, filtra la lista por su tipo.
+async function goToMaterialFix(materialId, materialType) {
+  navigate("materials");
+  await ensureRefs();
+  const m = materialId ? materials.find((x) => x.id === +materialId) : null;
+  if (m) {
+    materialForm(m);
+    const host = document.getElementById("material-form-host");
+    host.scrollIntoView({ block: "center", behavior: "smooth" });
+    const price = host.querySelector('[data-k="price_per_kg"]');
+    if (price) { price.focus(); price.select?.(); }
+    toast(`Pon el precio/kg de ${m.name}`);
+  } else if (materialType) {
+    matFilter.type.clear(); matFilter.type.add(materialType);
+    renderMaterialsTable();
+    toast(`Filtrado por ${materialType}: pon el precio/kg`);
+  }
+}
 
 // Salta a Impresiones filtrando por un gcode, con la ÚLTIMA impresión arriba.
 async function goToJobsForGcode(gcodeFilename) {
@@ -280,10 +341,10 @@ function renderJobsTable(rows, pmap, mById) {
 
   const header = `<tr>
     <th class="thumb-col"></th>
-    ${th("filename", "Archivo")}<th></th>${th("printer", "Impresora")}
-    ${th("status", "Estado")}${th("end_time", "Fin")}${th("print_duration_s", "Duración", "num")}
-    ${th("filament_weight_g", "Filam.", "num")}${th("energy_kwh", "Energía", "num")}
-    <th>Material</th>${th("cost_total", "Coste", "num")}<th></th></tr>`;
+    ${th("filename", "Archivo")}${th("cost_total", "Coste", "num")}<th></th>
+    ${th("printer", "Impresora")}${th("status", "Estado")}${th("end_time", "Fin")}
+    ${th("print_duration_s", "Duración", "num")}${th("filament_weight_g", "Filam.", "num")}
+    ${th("energy_kwh", "Energía", "num")}<th>Material</th><th></th></tr>`;
 
   document.getElementById("jobs-table").innerHTML = header +
     (rows.length ? rows.map((j) => {
@@ -304,7 +365,19 @@ function renderJobsTable(rows, pmap, mById) {
           const badges = (j.in_use && j.in_use.length)
             ? `<div class="use-badges">${j.in_use.map((u) => `<span class="use-badge ${u.kind}" data-use-kind="${u.kind}" title="${u.kind === "order" ? "Pedido" : "Proyecto"}: ${escHtml(u.label)}">${escHtml(u.label)}</span>`).join("")}</div>`
             : "";
-          return `<td>${nameEl}${badges}</td>`;
+          return `<td class="job-name-cell">${nameEl}${badges}</td>`;
+        })()}
+        ${(() => {
+          // Coste en ámbar si el filamento no se está cobrando (material sin
+          // precio/kg o sin material): avisa de que el número está incompleto.
+          const mat = j.material_id != null ? mById[j.material_id] : null;
+          const falta = (j.filament_weight_g || 0) > 0 && (!mat || (mat.price_per_kg || 0) <= 0);
+          if (!falta)
+            return `<td class="num"><strong class="cost-val ok">${money(j.cost_total)}</strong></td>`;
+          const attrs = mat
+            ? `data-fix-mat="${mat.id}" title="Falta el precio/kg de ${escHtml(mat.name)} — clic para ponerlo"`
+            : `data-fix-mat="" title="Sin material asignado: asígnalo para cobrar el filamento"`;
+          return `<td class="num"><strong class="cost-val warn" ${attrs}>${money(j.cost_total)}</strong></td>`;
         })()}
         <td class="use-cell"><button class="btn ghost small add-to-btn" data-add-order="${j.id}" title="Añadir a un pedido o proyecto">Agregar a:</button></td>
         <td>${escHtml(pmap[j.printer_id] || String(j.printer_id))}</td>
@@ -315,7 +388,6 @@ function renderJobsTable(rows, pmap, mById) {
         <td class="num"${j.energy_estimated ? ' title="Energía estimada con la potencia media de otra impresora (no medida)"' : ""}>${j.energy_kwh != null ? (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh" : "—"}</td>
         <td><div class="mat-cell">${jobMatButton(j, mById)}
           <button class="btn ghost small" data-gcode-fil="${j.id}" title="Filamentos del gcode (elegir cuál se usó / crear)">🧵</button></div></td>
-        <td class="num"><strong>${money(j.cost_total)}</strong></td>
         <td class="row-actions">
           <button class="btn ghost small" data-recompute="${j.id}">↻</button>
           <button class="btn danger small" data-del-job="${j.id}">✕</button>
@@ -349,6 +421,11 @@ function renderJobsTable(rows, pmap, mById) {
     el.addEventListener("click", () => openGcodeInUI(el)));
   document.querySelectorAll("[data-add-order]").forEach((b) =>
     b.addEventListener("click", () => openAddPicker(+b.dataset.addOrder)));
+  document.querySelectorAll("#jobs-table [data-fix-mat]").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (b.dataset.fixMat) goToMaterialFix(b.dataset.fixMat);
+      else toast("Asigna primero un material a esta impresión");
+    }));
   document.querySelectorAll("#jobs-table [data-use-kind]").forEach((b) =>
     b.addEventListener("click", () => {
       showTab("pedidos");
@@ -411,6 +488,7 @@ async function openAddPicker(jobId) {
             await api.send(`/api/projects/${c.dataset.id}/add-job`, "POST", { job_id: job.id });
           closeOrderPicker();
           toast(mode === "orders" ? "Añadido al pedido" : "Añadido al proyecto");
+          loadJobs();   // refresca para que el badge de pertenencia salga ya
         } catch (e) { toast("No se pudo añadir"); }
       }));
   };
@@ -1662,8 +1740,11 @@ function renderOrders() {
               : `<span class="muted">${escHtml(it.printer_name)}</span>`)
         : `<span class="muted">—</span>`;
       // Coste de imprimir la pieza: coste del gcode × cantidad.
+      // Ámbar si el material no tiene precio (el coste va incompleto).
       const itemCost = it.unit_cost != null
-        ? `<span class="oi-cost muted" title="${money2(it.unit_cost, cur)} c/u × ${it.quantity}">💲${money2(it.unit_cost * it.quantity, cur)}</span>`
+        ? (it.no_price
+          ? `<span class="oi-cost cost-val warn" data-fix-mat="${it.est_material_id || ""}" data-fix-type="${escHtml(it.est_material || "")}" title="Falta el precio/kg${it.est_material ? " de " + escHtml(it.est_material) : ""} — clic para ponerlo">${money2(it.unit_cost * it.quantity, cur)}</span>`
+          : `<span class="oi-cost cost-val ok" title="${money2(it.unit_cost, cur)} c/u × ${it.quantity}">${money2(it.unit_cost * it.quantity, cur)}</span>`)
         : "";
       // Miniatura del gcode (última impresión guardada); crece al desplegar.
       const thumb = it.thumbnail_url
@@ -1682,6 +1763,8 @@ function renderOrders() {
         ? `<span class="gcode-nav" data-goto-gcode="${escHtml(it.gcode_filename)}" title="Ver la última impresión de este gcode">${escHtml(gname)} →</span>`
         : escHtml(gname);
       const detail = `<div class="oi-detail">
+        <button class="btn danger small oi-del" data-del-item="${it.id}"
+          data-name="${escHtml(it.label || gname)}" title="Quitar esta pieza del pedido">✕ Quitar</button>
         ${bigThumb}
         <div class="oi-detail-body">
           <dl class="oi-dl">
@@ -1772,6 +1855,18 @@ function renderOrders() {
     }));
   host.querySelectorAll("[data-goto-gcode]").forEach((el) =>
     el.addEventListener("click", () => goToJobsForGcode(el.dataset.gotoGcode)));
+  host.querySelectorAll("[data-fix-mat], [data-fix-type]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();   // no desplegar la pieza al pulsar el coste
+      goToMaterialFix(b.dataset.fixMat, b.dataset.fixType);
+    }));
+  host.querySelectorAll("[data-del-item]").forEach((b) =>
+    b.addEventListener("click", async (e) => {
+      e.stopPropagation();   // no plegar la pieza al pulsar
+      if (!confirm(`¿Quitar “${b.dataset.name}” de este pedido?`)) return;
+      await api.send(`/api/order-items/${b.dataset.delItem}`, "DELETE");
+      toast("Pieza quitada"); loadPedidos();
+    }));
   // Reabre las piezas que estaban desplegadas antes del refresco.
   host.querySelectorAll(".order-item-wrap").forEach((w) => {
     if (openPieces.has(+w.dataset.itemId)) w.classList.add("open");
@@ -2193,6 +2288,18 @@ function renderProjectsBoard() {
       if (e.target.closest("button, a, .gcode-nav")) return;
       row.closest(".order-item-wrap").classList.toggle("open");
     }));
+  host.querySelectorAll("[data-fix-type]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      goToMaterialFix(b.dataset.fixMat, b.dataset.fixType);
+    }));
+  host.querySelectorAll("[data-del-part]").forEach((b) =>
+    b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm(`¿Quitar “${b.dataset.name}” de este proyecto?`)) return;
+      await api.send(`/api/project-parts/${b.dataset.delPart}`, "DELETE");
+      toast("Parte quitada"); loadProjects();
+    }));
   host.querySelectorAll("[data-goto-gcode]").forEach((el) =>
     el.addEventListener("click", () => goToJobsForGcode(el.dataset.gotoGcode)));
 }
@@ -2211,7 +2318,10 @@ function projPartRow(p) {
   const gcodeCell = p.gcode_filename
     ? `<span class="gcode-nav" data-goto-gcode="${escHtml(p.gcode_filename)}" title="Ver la última impresión">${escHtml(gname)} →</span>`
     : escHtml(gname);
-  const detail = `<div class="oi-detail">${bigThumb}<div class="oi-detail-body"><dl class="oi-dl">
+  const detail = `<div class="oi-detail">
+    <button class="btn danger small oi-del" data-del-part="${p.id}"
+      data-name="${escHtml(p.name || gname)}" title="Quitar esta parte del proyecto">✕ Quitar</button>
+    ${bigThumb}<div class="oi-detail-body"><dl class="oi-dl">
     ${drow("Gcode", gcodeCell)}
     ${drow("Impresora", p.printer_name ? escHtml(p.printer_name) : null)}
     ${drow("Material", `${escHtml(p.material_type)}${p.no_price ? ' <span class="pill review">sin precio</span>' : ""}`)}
@@ -2229,7 +2339,7 @@ function projPartRow(p) {
       <span class="oi-names"><span class="oi-name">${escHtml(gname)}</span></span>
       <span class="muted">${escHtml(p.material_type)}${p.weight_g ? " · " + p.weight_g + " g" : ""}${p.printer_name ? " · " + escHtml(p.printer_name) : ""}${p.quantity > 1 ? " · ×" + p.quantity : ""}</span>
       <span class="spacer"></span>
-      <span class="oi-cost muted">💲${money2(p.line_cost, currency)}</span>
+      <span class="oi-cost cost-val ${p.no_price ? "warn" : "ok"}"${p.no_price ? ` data-fix-type="${escHtml(p.material_type || "")}" title="Ningún ${escHtml(p.material_type || "material")} tiene precio/kg — clic para ponerlo"` : ""}>${money2(p.line_cost, currency)}</span>
       <span class="oi-caret" aria-hidden="true">▸</span>
     </div>
     ${detail}
@@ -3441,6 +3551,7 @@ document.getElementById("save-settings").addEventListener("click", async () => {
       orders_folder_base: document.getElementById("set-orders-folder").value,
     });
     currency = appSettings.currency;
+    applyBrand();            // el logo del panel se actualiza al guardarlo
     toast("Ajustes guardados");
   } catch (e) {
     toast("Error: " + e.message);
@@ -3455,5 +3566,25 @@ async function ensureRefs() {
   currency = appSettings.currency;
 }
 
-// Carga inicial
-ensureRefs().then(() => { loadDashboard(); renderLive(); });
+// Marca del panel: el logo de empresa si está configurado en Ajustes; si no,
+// el texto. Se aplica al arrancar y al guardar los ajustes.
+function applyBrand() {
+  const host = document.getElementById("side-brand");
+  if (!host) return;
+  const logo = appSettings && appSettings.company_logo;
+  const name = (appSettings && appSettings.company_name) || "M3D Nexus";
+  host.innerHTML = logo
+    ? `<img src="${escHtml(logo)}" alt="${escHtml(name)}" title="${escHtml(name)}">`
+    : `<h1>M3D <span>Nexus</span></h1>`;
+}
+
+// Carga inicial: abre la sección que pide la URL (permite entrar directo a
+// /pedidos o recargar sin volver al dashboard).
+ensureRefs().then(() => {
+  applyBrand();
+  const tab = tabFromPath();
+  history.replaceState({ tab }, "", `/${TAB_ROUTES[tab]}`);
+  showTab(tab);
+  loadTab(tab);
+  renderLive();
+});

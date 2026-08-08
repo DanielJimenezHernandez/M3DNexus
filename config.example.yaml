@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────
-# Configuración de printcost. Copia a config.yaml y ajústalo.
+# Configuración de M3D Nexus. Copia a config.yaml y ajústalo.
 #
 # Las claves de infraestructura (ha_url, ha_token, db_path...) se leen en cada
 # arranque y pueden sobreescribirse por variables de entorno (HA_URL, HA_TOKEN,

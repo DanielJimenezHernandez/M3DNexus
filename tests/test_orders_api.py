@@ -374,3 +374,18 @@ def test_add_item_order_no_existe(env):
     r = c.post("/api/orders/99999/items",
                json={"printer_id": 1, "gcode_filename": "x.gcode"})
     assert r.status_code == 404
+
+
+def test_delete_order_item(env):
+    c, _ = env
+    o = c.post("/api/orders", json={"client": "ACME", "items": [
+        {"printer_id": 1, "gcode_filename": "a.gcode"},
+        {"printer_id": 1, "gcode_filename": "b.gcode"},
+    ]}).json()
+    item_id = o["items"][0]["id"]
+    assert c.delete(f"/api/order-items/{item_id}").status_code == 204
+    orders = c.get("/api/orders").json()
+    orders = orders["orders"] if isinstance(orders, dict) else orders
+    quedan = next(x for x in orders if x["id"] == o["id"])["items"]
+    assert len(quedan) == 1 and quedan[0]["gcode_filename"] == "b.gcode"
+    assert c.delete("/api/order-items/99999").status_code == 404

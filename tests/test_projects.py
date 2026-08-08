@@ -151,3 +151,15 @@ def test_add_job_como_parte(tmp_path):
     assert part["print_time_s"] == 5400  # tiempo REAL
     dbmod._engine = orig
     dbmod.SessionLocal.configure(bind=orig)
+
+
+def test_delete_project_part(env):
+    pid = env.post("/api/projects", json={"name": "P", "parts": [
+        {"material_type": "PLA", "weight_g": 10, "quantity": 1},
+        {"material_type": "PLA", "weight_g": 20, "quantity": 1},
+    ]}).json()["id"]
+    part_id = env.get("/api/projects").json()[0]["parts"][0]["id"]
+    assert env.delete(f"/api/project-parts/{part_id}").status_code == 204
+    parts = env.get("/api/projects").json()[0]["parts"]
+    assert len(parts) == 1 and parts[0]["weight_g"] == 20
+    assert env.delete("/api/project-parts/99999").status_code == 404

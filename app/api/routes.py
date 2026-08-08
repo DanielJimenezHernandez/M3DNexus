@@ -534,7 +534,7 @@ def export_jobs_csv(db: Session = Depends(get_session)):
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=printcost_jobs.csv"},
+        headers={"Content-Disposition": "attachment; filename=m3dnexus_impresiones.csv"},
     )
 
 
@@ -838,6 +838,8 @@ def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -
         # Coste estimado de la pieza (× cantidad), si hay datos en el historial.
         # Del mismo estimate salen tiempo, filamento y material para el detalle.
         unit_cost = est_time_s = filament_g = est_material = None
+        est_material_id = None
+        no_price = False
         if it.printer_id and it.gcode_filename:
             printer = db.get(Printer, it.printer_id)
             if printer:
@@ -848,6 +850,14 @@ def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -
                     est_time_s = est.get("estimated_time_s")
                     filament_g = est.get("filament_g")
                     est_material = est.get("material")
+                    # Id del material, para poder saltar a editar su precio.
+                    if est_material:
+                        est_material_id = db.scalar(
+                            select(Material.id).where(Material.name == est_material)
+                        )
+                    # El coste va incompleto si hay filamento pero no se cobra:
+                    # material sin precio/kg o sin material resuelto.
+                    no_price = (filament_g or 0) > 0 and (est["cost"]["filament"] or 0) <= 0
         item_expenses = list(it.extra_expenses or [])
         total_cost += _sum_expenses(item_expenses)
         item_dicts.append({
@@ -857,6 +867,7 @@ def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -
             "manual_status": it.manual_status, "unit_cost": unit_cost,
             "thumbnail_url": _gcode_thumbnail_url(db, it.gcode_filename),
             "est_time_s": est_time_s, "filament_g": filament_g, "est_material": est_material,
+            "est_material_id": est_material_id, "no_price": no_price,
             "extra_expenses": item_expenses,
             "copy_status": list(it.copy_status or []),
             **st.as_dict(),
@@ -1009,6 +1020,16 @@ def add_order_item(order_id: int, data: OrderItemIn, db: Session = Depends(get_s
     return {"ok": True, "order_id": order.id}
 
 
+@router.delete("/order-items/{item_id}", status_code=204)
+def delete_order_item(item_id: int, db: Session = Depends(get_session)):
+    """Quita una pieza de su pedido (sin abrir el editor completo)."""
+    item = db.get(OrderItem, item_id)
+    if not item:
+        raise HTTPException(404, "Pieza no encontrada")
+    db.delete(item)
+    db.commit()
+
+
 @router.delete("/orders/{order_id}", status_code=204)
 def delete_order(order_id: int, db: Session = Depends(get_session)):
     order = db.get(Order, order_id)
@@ -1090,6 +1111,16 @@ def update_project(project_id: int, data: ProjectIn, db: Session = Depends(get_s
     db.commit()
     db.refresh(project)
     return resolve_project(db, project)
+
+
+@router.delete("/project-parts/{part_id}", status_code=204)
+def delete_project_part(part_id: int, db: Session = Depends(get_session)):
+    """Quita una parte de su proyecto (sin abrir el editor completo)."""
+    part = db.get(ProjectPart, part_id)
+    if not part:
+        raise HTTPException(404, "Parte no encontrada")
+    db.delete(part)
+    db.commit()
 
 
 @router.delete("/projects/{project_id}", status_code=204)

@@ -3,15 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>M3D Nexus — coste de impresiones 3D</title>
-  <link rel="stylesheet" href="/style.css?v=74" />
+  <title>M3D Nexus — gestión de impresión 3D</title>
+  <link rel="stylesheet" href="/style.css?v=80" />
 </head>
 <body>
-  <header>
-    <h1>M3D <span>Nexus</span></h1>
+  <!-- Panel lateral colapsable. Los botones conservan data-tab: es la clave que
+       usan el enrutado y los tests de UI. -->
+  <aside id="sidebar">
+    <div class="side-head">
+      <!-- La marca la pinta applyBrand(): el logo de Ajustes si lo hay, y si no
+           el texto. -->
+      <div id="side-brand"><h1>M3D <span>Nexus</span></h1></div>
+      <button id="side-toggle" title="Colapsar menú" aria-label="Colapsar menú">‹</button>
+    </div>
     <nav>
       <button data-tab="dashboard" class="active">Dashboard</button>
-      <button data-tab="pedidos">Pedidos</button>
+      <button data-tab="pedidos">Trabajos</button>
       <button data-tab="jobs">Impresiones</button>
       <button data-tab="printers">Impresoras</button>
       <button data-tab="materials">Materiales</button>
@@ -20,7 +27,8 @@
       <button data-tab="cotizacion">Cotización</button>
       <button data-tab="settings">Ajustes</button>
     </nav>
-  </header>
+  </aside>
+  <button id="side-open" title="Abrir menú" aria-label="Abrir menú">☰</button>
 
   <main>
     <!-- Dashboard -->
@@ -290,6 +298,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=74"></script>
+  <script src="/app.js?v=80"></script>
 </body>
 </html>

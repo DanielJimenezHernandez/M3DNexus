@@ -103,6 +103,15 @@ await t("multi-material: se queda con el primer tipo", async () => {
   const d = await parseGcode(gcodeFile("mm.gcode", "; filament_type = PETG;PLA\n"));
   assert.strictEqual(d.filament_type, "PETG");
 });
+await t("multi-material: SUMA el peso por filamento, no el primero", async () => {
+  // Un extrusor no usado (0.00) + el que sí (23.60): el total es 23.60, no 0.
+  const d = await parseGcode(gcodeFile("mm.gcode",
+    "; filament used [mm] = 0.00, 7911.98\n" +
+    "; filament used [g] = 0.00, 23.60\n" +
+    "; total filament used [g] = 23.60\n" +
+    "; filament_type = PLA;PLA\n"));
+  assert.ok(Math.abs(d.filament_g - 23.60) < 0.01, `peso ${d.filament_g}`);
+});
 await t("archivo grande: solo lee cabecera y cola", async () => {
   const relleno = "G1 X1 Y1 E0.5\n".repeat(200000);   // ~2.8 MB en medio
   const gcode = thumbBlock(100, 100, PNG1x1) + relleno +

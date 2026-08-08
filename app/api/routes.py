@@ -720,6 +720,25 @@ def _sum_expenses(items) -> float:
     return total
 
 
+def _gcode_thumbnail_url(db: Session, gcode_filename: str | None) -> str | None:
+    """URL de la miniatura de la última impresión guardada de ese gcode (o None).
+
+    La miniatura es del gcode, igual en cualquier máquina, así que sirve la de
+    cualquier impresión de ese archivo que la tenga guardada (funciona offline).
+    """
+    if not gcode_filename:
+        return None
+    jid = db.scalar(
+        select(PrintJob.id)
+        .where(
+            PrintJob.filename == gcode_filename,
+            PrintJob.has_thumbnail == True,  # noqa: E712
+        )
+        .order_by(PrintJob.end_time.desc().nulls_last())
+    )
+    return f"/api/jobs/{jid}/thumbnail" if jid else None
+
+
 def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -> dict:
     """Serializa un pedido con el estado de cada pieza (marcado a mano)."""
     item_dicts, item_states = [], []
@@ -738,7 +757,8 @@ def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -
         )
         item_states.append(st)
         # Coste estimado de la pieza (× cantidad), si hay datos en el historial.
-        unit_cost = None
+        # Del mismo estimate salen tiempo, filamento y material para el detalle.
+        unit_cost = est_time_s = filament_g = est_material = None
         if it.printer_id and it.gcode_filename:
             printer = db.get(Printer, it.printer_id)
             if printer:
@@ -746,6 +766,9 @@ def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -
                 if est.get("has_data"):
                     unit_cost = est["cost"]["total"]
                     total_cost += unit_cost * it.quantity
+                    est_time_s = est.get("estimated_time_s")
+                    filament_g = est.get("filament_g")
+                    est_material = est.get("material")
         item_expenses = list(it.extra_expenses or [])
         total_cost += _sum_expenses(item_expenses)
         item_dicts.append({
@@ -753,6 +776,8 @@ def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -
             "printer_name": db.get(Printer, it.printer_id).name if it.printer_id else None,
             "gcode_filename": it.gcode_filename, "quantity": it.quantity,
             "manual_status": it.manual_status, "unit_cost": unit_cost,
+            "thumbnail_url": _gcode_thumbnail_url(db, it.gcode_filename),
+            "est_time_s": est_time_s, "filament_g": filament_g, "est_material": est_material,
             "extra_expenses": item_expenses,
             "copy_status": list(it.copy_status or []),
             **st.as_dict(),

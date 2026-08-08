@@ -56,16 +56,35 @@ function toast(msg) {
 
 // --- Navegación por pestañas -------------------------------------------------
 let currentTab = "dashboard";
+// Activa una pestaña en la UI (sin cargarla). Reutilizable para navegar por
+// código, p.ej. saltar de una pieza de un pedido a sus impresiones.
+function showTab(name) {
+  document.querySelectorAll("nav button").forEach((x) => x.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+  const btn = document.querySelector(`nav button[data-tab="${name}"]`);
+  if (btn) btn.classList.add("active");
+  currentTab = name;
+  document.getElementById(name).classList.add("active");
+}
 document.querySelectorAll("nav button").forEach((b) => {
-  b.addEventListener("click", () => {
-    document.querySelectorAll("nav button").forEach((x) => x.classList.remove("active"));
-    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active");
-    currentTab = b.dataset.tab;
-    document.getElementById(b.dataset.tab).classList.add("active");
-    loadTab(b.dataset.tab);
-  });
+  b.addEventListener("click", () => { showTab(b.dataset.tab); loadTab(b.dataset.tab); });
 });
+
+// Salta a Impresiones filtrando por un gcode, con la ÚLTIMA impresión arriba.
+async function goToJobsForGcode(gcodeFilename) {
+  const base = (gcodeFilename || "").split("/").pop();
+  if (!base) return;
+  showTab("jobs");
+  await loadJobs();                 // carga allJobs antes de filtrar
+  document.getElementById("jobs-search").value = base;
+  jobsSort = { key: "end_time", dir: "desc" };   // la última impresión, primera
+  applyJobsView();
+  const first = document.querySelector("#jobs-table tr:nth-child(2)");  // 1ª = cabecera
+  if (first) {
+    first.classList.add("row-flash");
+    first.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+}
 
 function loadTab(name) {
   ({ dashboard: loadDashboard, pedidos: loadPedidos, jobs: loadJobs,
@@ -1475,10 +1494,10 @@ function renderOrders() {
       const copyChips = `<span class="board-copies" data-oid="${o.id}" data-idx="${idx}">${chips}
         <button type="button" class="btn small board-save" hidden>Guardar</button></span>`;
       // El nombre del gcode que se imprime; la etiqueta (si hay) va encima.
-      const gname = (it.gcode_filename || "").split("/").pop();
+      const gname = (it.gcode_filename || "").split("/").pop() || "sin gcode";
       const name = it.label
-        ? `<span class="oi-name">${escHtml(it.label)}</span><span class="muted oi-gcode" title="${escHtml(it.gcode_filename || "")}">${escHtml(gname || "sin gcode")}</span>`
-        : `<span class="oi-name" title="${escHtml(it.gcode_filename || "")}">${escHtml(gname || "sin gcode")}</span>`;
+        ? `<span class="oi-name">${escHtml(it.label)}</span><span class="muted oi-gcode" title="${escHtml(it.gcode_filename || "")}">${escHtml(gname)}</span>`
+        : `<span class="oi-name" title="${escHtml(it.gcode_filename || "")}">${escHtml(gname)}</span>`;
       // Nombre de impresora como enlace a su interfaz Klipper.
       const pr = printers.find((p) => p.id === it.printer_id);
       const ku = pr && klipperUrl(pr);
@@ -1490,15 +1509,40 @@ function renderOrders() {
       const itemCost = it.unit_cost != null
         ? `<span class="oi-cost muted" title="${money2(it.unit_cost, cur)} c/u × ${it.quantity}">💲${money2(it.unit_cost * it.quantity, cur)}</span>`
         : "";
-      return `<div class="order-item">
-        <span class="oi-names">${name}</span>
-        ${printer}
-        ${statusPill(ITEM_STATUS, it.status)}${copies}
-        ${copyChips}
-        ${eta}
-        ${prog}
-        <span class="spacer"></span>
-        ${itemCost}
+      // Miniatura del gcode (última impresión guardada); crece al desplegar.
+      const thumb = it.thumbnail_url
+        ? `<img class="oi-thumb" src="${it.thumbnail_url}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'oi-thumb ph'}))">`
+        : `<div class="oi-thumb ph"></div>`;
+      // Panel de detalle (oculto hasta desplegar la pieza).
+      const drow = (k, v) => v == null || v === "" ? "" : `<div><span class="muted">${k}</span> ${v}</div>`;
+      const expLines = (it.extra_expenses || []).map((e) =>
+        drow(escHtml(e.label || "gasto"), `${money2((e.amount || 0) * (e.quantity || 1), cur)}`)).join("");
+      const detail = `<div class="oi-detail">
+        <div class="oi-detail-grid">
+          ${drow("Gcode", escHtml(gname))}
+          ${drow("Material", it.est_material ? escHtml(it.est_material) : null)}
+          ${drow("Tiempo est.", it.est_time_s ? fmtDur(it.est_time_s) : null)}
+          ${drow("Filamento", it.filament_g ? it.filament_g.toFixed(0) + " g" : null)}
+          ${drow("Coste", it.unit_cost != null ? `${money2(it.unit_cost, cur)} × ${it.quantity} = <strong>${money2(it.unit_cost * it.quantity, cur)}</strong>` : null)}
+          ${drow("Impresas", `${it.printed}/${it.quantity}`)}
+          ${expLines}
+        </div>
+        ${it.gcode_filename ? `<button class="btn ghost small oi-goto" data-goto-gcode="${escHtml(it.gcode_filename)}">Ver última impresión →</button>` : ""}
+      </div>`;
+      return `<div class="order-item-wrap">
+        <div class="order-item" data-expand-item>
+          ${thumb}
+          <span class="oi-names">${name}</span>
+          ${printer}
+          ${statusPill(ITEM_STATUS, it.status)}${copies}
+          ${copyChips}
+          ${eta}
+          ${prog}
+          <span class="spacer"></span>
+          ${itemCost}
+          <span class="oi-caret" aria-hidden="true">▸</span>
+        </div>
+        ${detail}
       </div>`;
     }).join("");
 
@@ -1555,6 +1599,15 @@ function renderOrders() {
     b.addEventListener("click", async () => {
       if (!confirm("¿Borrar pedido?")) return;
       await api.send(`/api/orders/${b.dataset.delOrder}`, "DELETE"); loadPedidos();
+    }));
+  host.querySelectorAll("[data-goto-gcode]").forEach((el) =>
+    el.addEventListener("click", () => goToJobsForGcode(el.dataset.gotoGcode)));
+  // Clic en la pieza: despliega/oculta su detalle (y agranda la miniatura). Se
+  // ignoran los controles interactivos (chips de copia, guardar, enlaces).
+  host.querySelectorAll(".order-item[data-expand-item]").forEach((row) =>
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("button, a, select, input, .board-copies")) return;
+      row.closest(".order-item-wrap").classList.toggle("open");
     }));
 
   // Chips por copia interactivos en el tablero.
@@ -2287,18 +2340,25 @@ async function parseGcode(file) {
   const grab = (re) => { const m = text.match(re); return m ? m[1].trim() : null; };
 
   const layer = grab(/;\s*layer[_ ]height\s*[:=]\s*([\d.]+)/i);
-  const grams = grab(/;\s*(?:total\s+)?filament[_ ]used\s*\[g\]\s*=\s*([\d.]+)/i)
-             ?? grab(/;\s*filament[_ ]weight[_ ]total\s*[:=]\s*([\d.]+)/i);
-  const mm = grab(/;\s*(?:total\s+)?filament[_ ]used\s*\[mm\]\s*=\s*([\d.]+)/i);
+  // En multi-material el laminador escribe "filament used [g] = a, b" (un valor
+  // por filamento) y "total filament used [g] = T". Hay que SUMAR / usar el
+  // total, no quedarse con el primer valor (que puede ser 0 si ese extrusor no
+  // se usó). Se captura la línea entera (sin salto) y se suman las comas.
+  const sumCsv = (s) => s == null ? null : s.split(",").reduce((a, x) => a + (parseFloat(x) || 0), 0);
+  const grams = sumCsv(grab(/;\s*total\s+filament[_ ]used\s*\[g\]\s*=\s*([0-9.,\t ]+)/i))
+             ?? sumCsv(grab(/;\s*filament[_ ]used\s*\[g\]\s*=\s*([0-9.,\t ]+)/i))
+             ?? sumCsv(grab(/;\s*filament[_ ]weight[_ ]total\s*[:=]\s*([0-9.,\t ]+)/i));
+  const mm = sumCsv(grab(/;\s*total\s+filament[_ ]used\s*\[mm\]\s*=\s*([0-9.,\t ]+)/i))
+          ?? sumCsv(grab(/;\s*filament[_ ]used\s*\[mm\]\s*=\s*([0-9.,\t ]+)/i));
   const curaM = grab(/;Filament used:\s*([\d.]+)m/i);   // Cura: en metros
   const type = grab(/;\s*filament[_ ]type\s*[:=]\s*([A-Za-z0-9+\-. ]+)/i);
   const timeRaw = grab(/;\s*estimated printing time[^=]*=\s*(.+)/i)
                ?? grab(/;TIME:\s*(\d+)/i);
 
-  let weightG = grams ? parseFloat(grams) : null;
+  let weightG = grams ? grams : null;
   if (weightG == null) {
     // Sin peso del laminador: se deduce de la longitud, como en el registro.
-    const lenMm = mm ? parseFloat(mm) : (curaM ? parseFloat(curaM) * 1000 : 0);
+    const lenMm = mm ? mm : (curaM ? parseFloat(curaM) * 1000 : 0);
     if (lenMm > 0) {
       const dens = (materials.find((x) => x.material_type === type)?.density_g_cm3) || 1.24;
       weightG = Math.PI * Math.pow(0.175 / 2, 2) * (lenMm / 10) * dens;

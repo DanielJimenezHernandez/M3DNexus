@@ -381,3 +381,30 @@ td a:hover { text-decoration: underline; }
 .mp-cname { font-weight: 600; display: flex; align-items: center; gap: 0.3rem;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mp-cmeta { font-size: 0.76rem; }
+
+/* Nombre de gcode en pedidos: enlace a su última impresión. */
+.oi-gcode-link { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.oi-gcode-link:hover { color: var(--accent); text-decoration-style: solid; }
+/* Resaltado breve de la fila de impresión al llegar desde un pedido. */
+@keyframes rowFlash { 0% { background: var(--accent); } 100% { background: transparent; } }
+.row-flash > td { animation: rowFlash 1.6s ease-out; }
+
+/* Miniatura del gcode en cada pieza de un pedido. */
+.oi-thumb { width: 34px; height: 34px; object-fit: cover; border-radius: 5px;
+  background: var(--border); display: block; flex: 0 0 auto; }
+.oi-thumb.ph { background: repeating-linear-gradient(45deg, var(--border), var(--border) 3px, transparent 3px, transparent 6px); opacity: 0.5; }
+.oi-thumb-wrap { flex: 0 0 auto; display: block; cursor: pointer; }
+
+/* Pieza de pedido desplegable: clic para expandir detalle y agrandar miniatura. */
+.order-item { cursor: pointer; }
+.oi-caret { color: var(--muted); font-size: 0.8rem; transition: transform 0.15s; }
+.order-item-wrap.open .oi-caret { transform: rotate(90deg); }
+.oi-thumb { transition: width 0.15s ease, height 0.15s ease; }
+.order-item-wrap.open .order-item { align-items: flex-start; border-radius: 8px 8px 0 0; }
+.order-item-wrap.open .oi-thumb { width: 128px; height: 128px; }
+.oi-detail { display: none; background: var(--panel-2); border-radius: 0 0 8px 8px;
+  padding: 0.1rem 0.6rem 0.6rem; font-size: 0.82rem; }
+.order-item-wrap.open .oi-detail { display: block; }
+.oi-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.2rem 0.9rem; margin: 0.2rem 0 0.6rem; }
+.oi-detail-grid .muted { display: inline-block; min-width: 76px; }

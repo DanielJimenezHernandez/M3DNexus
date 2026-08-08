@@ -88,6 +88,7 @@ def _migrate() -> None:
             "maintenance_per_hour": "ALTER TABLE printers ADD COLUMN maintenance_per_hour FLOAT DEFAULT 0",
             "power_ref_printer_id": "ALTER TABLE printers ADD COLUMN power_ref_printer_id INTEGER",
             "ui_port": "ALTER TABLE printers ADD COLUMN ui_port INTEGER DEFAULT 80",
+            "ui_type": "ALTER TABLE printers ADD COLUMN ui_type VARCHAR DEFAULT 'mainsail'",
             "host": "ALTER TABLE printers ADD COLUMN host VARCHAR DEFAULT ''",
             "moonraker_port": "ALTER TABLE printers ADD COLUMN moonraker_port INTEGER DEFAULT 7125",
         },

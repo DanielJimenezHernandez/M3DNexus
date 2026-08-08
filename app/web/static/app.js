@@ -294,7 +294,14 @@ function renderJobsTable(rows, pmap, mById) {
         : `<div class="job-thumb ph"></div>`;
       return `<tr>
         <td class="thumb-col">${thumb}</td>
-        <td class="job-name" title="${escHtml(j.filename || "")}">${escHtml((j.filename || "—").split("/").pop())}</td>
+        ${(() => {
+          const short = escHtml((j.filename || "—").split("/").pop());
+          const pr = printers.find((p) => p.id === j.printer_id);
+          const url = pr && j.filename ? klipperJobsUrl(pr) : null;
+          return url
+            ? `<td><span class="job-name gcode-open" data-open-url="${escHtml(url)}" data-gcode-name="${escHtml((j.filename || "").split("/").pop())}" title="Abrir en ${escHtml(pr.name)} y copiar el nombre">${short} ↗</span></td>`
+            : `<td class="job-name" title="${escHtml(j.filename || "")}">${short}</td>`;
+        })()}
         <td>${escHtml(pmap[j.printer_id] || String(j.printer_id))}</td>
         <td><span class="pill ${j.status}">${j.status}</span>${review}</td>
         <td class="muted">${fmtDate(j.end_time)}</td>
@@ -333,6 +340,8 @@ function renderJobsTable(rows, pmap, mById) {
     }));
   document.querySelectorAll("[data-gcode-fil]").forEach((b) =>
     b.addEventListener("click", () => pickGcodeFilament(b)));
+  document.querySelectorAll("#jobs-table [data-open-url]").forEach((el) =>
+    el.addEventListener("click", () => openGcodeInUI(el)));
 }
 
 // Filamentos del gcode: para multi-material, elegir con cuál se imprimió; si no
@@ -497,6 +506,21 @@ function klipperUrl(p) {
   return `http://${p.host}${port === 80 ? "" : ":" + port}`;
 }
 
+// Ruta de archivos/jobs según la interfaz Klipper de la impresora.
+const KLIPPER_JOBS_PATH = { mainsail: "/files", fluidd: "/#/jobs" };
+function klipperJobsUrl(p) {
+  const base = p && klipperUrl(p);
+  return base ? base + (KLIPPER_JOBS_PATH[p.ui_type] || KLIPPER_JOBS_PATH.mainsail) : null;
+}
+// Abre el gcode en la UI de la impresora y copia su nombre (Mainsail/Fluidd no
+// aceptan un buscador precargado por URL, así que se copia para pegar).
+function openGcodeInUI(el) {
+  const name = el.dataset.gcodeName || "";
+  if (navigator.clipboard) navigator.clipboard.writeText(name).catch(() => {});
+  toast(`Abriendo la impresora · busca: ${name}`);
+  window.open(el.dataset.openUrl, "_blank", "noopener");
+}
+
 let loadedByPrinter = {};
 
 // Un hueco cargado: muestra de color + nombre, con el origen del dato.
@@ -630,6 +654,10 @@ function printerForm(p = {}) {
     <label class="field"><span>Energía: tomar prestada de…</span>
       <select data-k="power_ref_printer_id" id="pf-powerref">${refOpts}</select>
       <small class="muted">Solo si NO tiene sensor propio: estima la luz con la potencia media de otra máquina (marca sus impresiones como estimadas).</small></label>
+    <label class="field"><span>Interfaz Klipper</span><select data-k="ui_type">
+      <option value="mainsail" ${p.ui_type !== "fluidd" ? "selected" : ""}>Mainsail (/files)</option>
+      <option value="fluidd" ${p.ui_type === "fluidd" ? "selected" : ""}>Fluidd (/#/jobs)</option></select>
+      <small class="muted">Para abrir el gcode en la UI de la impresora desde Impresiones.</small></label>
     <label class="field"><span>Activa</span><select data-k="enabled">
       <option value="true" ${p.enabled !== false ? "selected" : ""}>Sí</option>
       <option value="false" ${p.enabled === false ? "selected" : ""}>No</option></select></label>
@@ -1417,6 +1445,8 @@ const PAY_STATUS = { pending: "Pendiente", deposit: "Anticipo", paid: "Completo"
 const DUE_RANK = { "vencido": 0, "vence hoy": 1, "mañana": 2 };
 
 let orders = [];
+// Piezas desplegadas (ids), para que el refresco cada 8 s no las cierre.
+const openPieces = new Set();
 
 function statusPill(map, key) {
   const [txt, col] = map[key] || ["—", "var(--muted)"];
@@ -1513,23 +1543,36 @@ function renderOrders() {
       const thumb = it.thumbnail_url
         ? `<img class="oi-thumb" src="${it.thumbnail_url}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'oi-thumb ph'}))">`
         : `<div class="oi-thumb ph"></div>`;
-      // Panel de detalle (oculto hasta desplegar la pieza).
-      const drow = (k, v) => v == null || v === "" ? "" : `<div><span class="muted">${k}</span> ${v}</div>`;
+      // Panel de detalle (oculto hasta desplegar la pieza): tabla etiqueta/valor
+      // con renglones definidos, más legible que una rejilla suelta.
+      const drow = (k, v) => v == null || v === "" ? "" : `<dt>${k}</dt><dd>${v}</dd>`;
       const expLines = (it.extra_expenses || []).map((e) =>
-        drow(escHtml(e.label || "gasto"), `${money2((e.amount || 0) * (e.quantity || 1), cur)}`)).join("");
+        drow(escHtml(e.label || "gasto"), money2((e.amount || 0) * (e.quantity || 1), cur))).join("");
+      const bigThumb = it.thumbnail_url
+        ? `<img class="oi-detail-thumb" src="${it.thumbnail_url}" loading="lazy" alt="">`
+        : `<div class="oi-detail-thumb ph"></div>`;
+      // El nombre del gcode es el enlace a su última impresión (color de acento).
+      const gcodeCell = it.gcode_filename
+        ? `<span class="gcode-nav" data-goto-gcode="${escHtml(it.gcode_filename)}" title="Ver la última impresión de este gcode">${escHtml(gname)} →</span>`
+        : escHtml(gname);
       const detail = `<div class="oi-detail">
-        <div class="oi-detail-grid">
-          ${drow("Gcode", escHtml(gname))}
-          ${drow("Material", it.est_material ? escHtml(it.est_material) : null)}
-          ${drow("Tiempo est.", it.est_time_s ? fmtDur(it.est_time_s) : null)}
-          ${drow("Filamento", it.filament_g ? it.filament_g.toFixed(0) + " g" : null)}
-          ${drow("Coste", it.unit_cost != null ? `${money2(it.unit_cost, cur)} × ${it.quantity} = <strong>${money2(it.unit_cost * it.quantity, cur)}</strong>` : null)}
-          ${drow("Impresas", `${it.printed}/${it.quantity}`)}
-          ${expLines}
+        ${bigThumb}
+        <div class="oi-detail-body">
+          <dl class="oi-dl">
+            ${drow("Gcode", gcodeCell)}
+            ${drow("Impresora", it.printer_name ? escHtml(it.printer_name) : null)}
+            ${drow("Material", it.est_material ? escHtml(it.est_material) : null)}
+            ${drow("Tiempo est.", it.est_time_s ? fmtDur(it.est_time_s) : null)}
+            ${drow("Filamento", it.filament_g ? it.filament_g.toFixed(0) + " g" : null)}
+            ${drow("Coste unitario", it.unit_cost != null ? money2(it.unit_cost, cur) : null)}
+            ${drow("Cantidad", it.quantity)}
+            ${drow("Coste total", it.unit_cost != null ? `<strong>${money2(it.unit_cost * it.quantity, cur)}</strong>` : null)}
+            ${drow("Impresas", `${it.printed}/${it.quantity}`)}
+            ${expLines}
+          </dl>
         </div>
-        ${it.gcode_filename ? `<button class="btn ghost small oi-goto" data-goto-gcode="${escHtml(it.gcode_filename)}">Ver última impresión →</button>` : ""}
       </div>`;
-      return `<div class="order-item-wrap">
+      return `<div class="order-item-wrap" data-item-id="${it.id}">
         <div class="order-item" data-expand-item>
           ${thumb}
           <span class="oi-names">${name}</span>
@@ -1602,12 +1645,19 @@ function renderOrders() {
     }));
   host.querySelectorAll("[data-goto-gcode]").forEach((el) =>
     el.addEventListener("click", () => goToJobsForGcode(el.dataset.gotoGcode)));
-  // Clic en la pieza: despliega/oculta su detalle (y agranda la miniatura). Se
-  // ignoran los controles interactivos (chips de copia, guardar, enlaces).
+  // Reabre las piezas que estaban desplegadas antes del refresco.
+  host.querySelectorAll(".order-item-wrap").forEach((w) => {
+    if (openPieces.has(+w.dataset.itemId)) w.classList.add("open");
+  });
+  // Clic en la pieza: despliega/oculta su detalle. Se ignoran los controles
+  // interactivos (chips de copia, guardar, enlaces). El estado se recuerda para
+  // que el refresco automático del tablero no lo cierre.
   host.querySelectorAll(".order-item[data-expand-item]").forEach((row) =>
     row.addEventListener("click", (e) => {
       if (e.target.closest("button, a, select, input, .board-copies")) return;
-      row.closest(".order-item-wrap").classList.toggle("open");
+      const wrap = row.closest(".order-item-wrap");
+      const id = +wrap.dataset.itemId;
+      if (wrap.classList.toggle("open")) openPieces.add(id); else openPieces.delete(id);
     }));
 
   // Chips por copia interactivos en el tablero.
@@ -1785,14 +1835,17 @@ function orderForm(o = {}, host = document.getElementById("order-form-host")) {
 
 function addOrderItem(host, it, prepend = false) {
   const row = el(`<div class="card oi-editor">
-    <div class="form-grid">
-      <label class="field"><span>Etiqueta (opcional)</span><input class="oi-label" value="${escHtml(it.label || "")}"></label>
-      <label class="field"><span>Impresora</span><select class="oi-printer">
-        <option value="">— elegir —</option>
-        ${printers.map((p) => `<option value="${p.id}" ${p.id === it.printer_id ? "selected" : ""}>${escHtml(p.name)}</option>`).join("")}
-      </select></label>
-      <label class="field"><span>Gcode en la impresora</span><select class="oi-gcode"><option value="">— elige impresora —</option></select></label>
-      <label class="field"><span>Cantidad</span><input type="number" min="1" class="oi-qty" value="${it.quantity || 1}"></label>
+    <div class="oi-edit-top">
+      <div class="oi-edit-thumb ph" title="Miniatura del gcode"></div>
+      <div class="form-grid" style="flex:1">
+        <label class="field"><span>Etiqueta (opcional)</span><input class="oi-label" value="${escHtml(it.label || "")}"></label>
+        <label class="field"><span>Impresora</span><select class="oi-printer">
+          <option value="">— elegir —</option>
+          ${printers.map((p) => `<option value="${p.id}" ${p.id === it.printer_id ? "selected" : ""}>${escHtml(p.name)}</option>`).join("")}
+        </select></label>
+        <label class="field"><span>Gcode en la impresora</span><select class="oi-gcode"><option value="">— elige impresora —</option></select></label>
+        <label class="field"><span>Cantidad</span><input type="number" min="1" class="oi-qty" value="${it.quantity || 1}"></label>
+      </div>
     </div>
     <div class="oi-copies-wrap">
       <span class="muted" style="font-size:.78rem">Estado por copia:</span>
@@ -1821,12 +1874,25 @@ function addOrderItem(host, it, prepend = false) {
   const gcodeSel = row.querySelector(".oi-gcode");
   row._current = it.gcode_filename || "";
   printerSel.addEventListener("change", () => loadOrderGcodes(row));
+  gcodeSel.addEventListener("change", () => updateItemThumb(row));
+  updateItemThumb(row);   // miniatura inicial (si ya trae gcode)
   if (it.printer_id) loadOrderGcodes(row);
   row.querySelector(".oi-remove").onclick = () => {
     if (host.children.length > 1) row.remove();
     else toast("Un pedido necesita al menos una pieza");
   };
   return row;
+}
+
+// Miniatura del gcode seleccionado en una fila del editor de pieza.
+function updateItemThumb(row) {
+  const box = row.querySelector(".oi-edit-thumb");
+  if (!box) return;
+  const gcode = row.querySelector(".oi-gcode").value;
+  if (!gcode) { box.className = "oi-edit-thumb ph"; box.innerHTML = ""; return; }
+  box.className = "oi-edit-thumb";
+  box.innerHTML = `<img src="/api/gcode-thumbnail?filename=${encodeURIComponent(gcode)}" alt=""
+    onerror="this.closest('.oi-edit-thumb').className='oi-edit-thumb ph';this.remove()">`;
 }
 
 // Buscador de gcode de la impresora elegida (en vivo, con fallback al historial).
@@ -1853,6 +1919,7 @@ async function loadOrderGcodes(row) {
   status.textContent = files && files.length
     ? `${files.length} gcodes (${src})`
     : "impresora apagada y sin historial";
+  updateItemThumb(row);   // refleja el gcode seleccionado
 }
 
 async function saveOrder(id, host, inline = false) {

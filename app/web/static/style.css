@@ -395,16 +395,39 @@ td a:hover { text-decoration: underline; }
 .oi-thumb.ph { background: repeating-linear-gradient(45deg, var(--border), var(--border) 3px, transparent 3px, transparent 6px); opacity: 0.5; }
 .oi-thumb-wrap { flex: 0 0 auto; display: block; cursor: pointer; }
 
-/* Pieza de pedido desplegable: clic para expandir detalle y agrandar miniatura. */
+/* Pieza de pedido desplegable: clic para expandir el detalle. La fila de arriba
+   no cambia; el detalle (miniatura grande + datos) aparece debajo. */
 .order-item { cursor: pointer; }
 .oi-caret { color: var(--muted); font-size: 0.8rem; transition: transform 0.15s; }
 .order-item-wrap.open .oi-caret { transform: rotate(90deg); }
-.oi-thumb { transition: width 0.15s ease, height 0.15s ease; }
-.order-item-wrap.open .order-item { align-items: flex-start; border-radius: 8px 8px 0 0; }
-.order-item-wrap.open .oi-thumb { width: 128px; height: 128px; }
-.oi-detail { display: none; background: var(--panel-2); border-radius: 0 0 8px 8px;
-  padding: 0.1rem 0.6rem 0.6rem; font-size: 0.82rem; }
-.order-item-wrap.open .oi-detail { display: block; }
-.oi-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 0.2rem 0.9rem; margin: 0.2rem 0 0.6rem; }
-.oi-detail-grid .muted { display: inline-block; min-width: 76px; }
+.order-item-wrap.open .order-item { border-radius: 8px 8px 0 0; }
+.oi-detail { display: none; gap: 0.9rem; background: var(--panel-2);
+  border-radius: 0 0 8px 8px; padding: 0.6rem; margin-top: 1px; }
+.order-item-wrap.open .oi-detail { display: flex; flex-wrap: wrap; }
+.oi-detail-thumb { width: 150px; height: 150px; object-fit: cover; border-radius: 8px;
+  flex: 0 0 auto; background: var(--border); }
+.oi-detail-thumb.ph { background: repeating-linear-gradient(45deg, var(--border), var(--border) 5px, transparent 5px, transparent 10px); opacity: 0.5; }
+.oi-detail-body { flex: 1 1 240px; min-width: 0; }
+/* Tabla etiqueta/valor: dos columnas alineadas con renglones definidos. */
+.oi-dl { display: grid; grid-template-columns: max-content 1fr; margin: 0 0 0.6rem;
+  font-size: 0.82rem; align-items: baseline; }
+.oi-dl dt { color: var(--muted); padding: 0.3rem 1rem 0.3rem 0;
+  border-top: 1px solid var(--border); white-space: nowrap; }
+.oi-dl dd { margin: 0; padding: 0.3rem 0; border-top: 1px solid var(--border);
+  min-width: 0; overflow-wrap: anywhere; }
+.oi-dl dt:first-of-type, .oi-dl dd:first-of-type { border-top: 0; }
+/* El nombre del gcode en el detalle: enlace a su última impresión. */
+.gcode-nav { color: var(--accent); cursor: pointer; font-weight: 600;
+  overflow-wrap: anywhere; }
+.gcode-nav:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* Nombre del gcode en Impresiones: abre la UI de la impresora (clickeable). */
+.gcode-open { color: var(--accent); cursor: pointer; }
+.gcode-open:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* Editor de pieza (editar pedido): miniatura del gcode a la izquierda. */
+.oi-edit-top { display: flex; gap: 0.8rem; align-items: flex-start; }
+.oi-edit-thumb { width: 76px; height: 76px; border-radius: 8px; flex: 0 0 auto;
+  overflow: hidden; background: var(--border); }
+.oi-edit-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.oi-edit-thumb.ph { background: repeating-linear-gradient(45deg, var(--border), var(--border) 4px, transparent 4px, transparent 8px); opacity: 0.5; }

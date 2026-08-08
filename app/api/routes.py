@@ -549,6 +549,27 @@ def job_thumbnail(job_id: int, db: Session = Depends(get_session)):
     )
 
 
+@router.get("/gcode-thumbnail")
+def gcode_thumbnail(filename: str, db: Session = Depends(get_session)):
+    """Miniatura de la última impresión guardada de un gcode, por su nombre.
+
+    Para previsualizar una pieza al editar un pedido, donde el gcode se elige de
+    un desplegable y aún no hay un job concreto asociado.
+    """
+    job = db.scalar(
+        select(PrintJob)
+        .where(PrintJob.filename == filename, PrintJob.has_thumbnail == True)  # noqa: E712
+        .order_by(PrintJob.end_time.desc().nulls_last())
+    )
+    if not job or not job.thumbnail:
+        raise HTTPException(404, "Sin miniatura")
+    return Response(
+        content=job.thumbnail,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/jobs/{job_id}/filaments")
 def job_gcode_filaments(job_id: int, db: Session = Depends(get_session)):
     """Filamentos que lista el gcode del job (multi-material incluido).

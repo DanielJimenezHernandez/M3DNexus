@@ -13,6 +13,7 @@ class PrinterIn(BaseModel):
     host: str
     moonraker_port: int = 7125
     ui_port: int = 80
+    ui_type: str = "mainsail"
     ha_energy_entity: str | None = None
     ha_power_entity: str | None = None
     power_ref_printer_id: int | None = None
@@ -33,6 +34,11 @@ class PrinterIn(BaseModel):
         if not 1 <= v <= 16:
             raise ValueError("El número de colores debe estar entre 1 y 16")
         return v
+
+    @field_validator("ui_type")
+    @classmethod
+    def _check_ui(cls, v: str) -> str:
+        return v if v in ("mainsail", "fluidd") else "mainsail"
 
 
 class PrinterOut(PrinterIn):

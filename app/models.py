@@ -33,6 +33,9 @@ class Printer(Base):
     host: Mapped[str] = mapped_column(String, default="")
     moonraker_port: Mapped[int] = mapped_column(Integer, default=7125)
     ui_port: Mapped[int] = mapped_column(Integer, default=80)
+    # Interfaz Klipper de esta máquina: define la ruta de archivos/jobs a la que
+    # enlazar desde Impresiones (mainsail → /files, fluidd → /#/jobs).
+    ui_type: Mapped[str] = mapped_column(String, default="mainsail")
     # Entidad de HA con la energía acumulada (kWh) del POW3 de esta impresora.
     ha_energy_entity: Mapped[str | None] = mapped_column(String, nullable=True)
     ha_power_entity: Mapped[str | None] = mapped_column(String, nullable=True)

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — coste de impresiones 3D</title>
-  <link rel="stylesheet" href="/style.css?v=70" />
+  <link rel="stylesheet" href="/style.css?v=74" />
 </head>
 <body>
   <header>
@@ -172,10 +172,12 @@
       <div class="toolbar">
         <h2 style="margin:0">Estimación de producto</h2>
         <span class="spacer"></span>
-        <label class="muted" style="display:flex;gap:.35rem;align-items:center">Promedio flota:
-          <select id="est-weighting">
-            <option value="usage">ponderado por uso</option>
-            <option value="simple">simple</option>
+        <label class="muted" style="display:flex;gap:.35rem;align-items:center">Base de coste:
+          <select id="est-basis">
+            <option value="max">Máximo de flota (protege precio)</option>
+            <option value="usage">Promedio ponderado por uso</option>
+            <option value="simple">Promedio simple</option>
+            <option value="min">Mínimo de flota (competitivo)</option>
           </select></label>
         <button class="btn" id="est-add">Subir gcodes…</button>
         <input type="file" id="est-input" accept=".gcode,.gco,.g" multiple hidden />
@@ -288,6 +290,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=70"></script>
+  <script src="/app.js?v=74"></script>
 </body>
 </html>

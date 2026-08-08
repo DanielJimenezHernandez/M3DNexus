@@ -485,3 +485,9 @@ td a:hover { text-decoration: underline; }
   cursor: pointer; flex: 0 0 auto; }
 .entity-photos { margin-top: 0.4rem; }
 .photo-tile img { cursor: pointer; }
+
+/* Miniatura del gcode en la fila de parte de proyecto. */
+.pf-part .pp-thumb { width: 38px; height: 38px; border-radius: 6px; overflow: hidden;
+  background: var(--border); flex: 0 0 auto; }
+.pp-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pp-thumb.ph { background: repeating-linear-gradient(45deg, var(--border), var(--border) 4px, transparent 4px, transparent 8px); opacity: 0.5; }

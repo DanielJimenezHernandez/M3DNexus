@@ -302,15 +302,20 @@ def fleet_cost_per_hour(
 
 
 def estimate_project(
-    session: Session, files: list[dict], weighting: str = "usage"
+    session: Session, files: list[dict], weighting: str = "usage", basis: str = "avg"
 ) -> dict:
     """Estima el coste de un proyecto (varios gcodes, posibles materiales varios).
 
     Cada archivo: {filename, weight_g, time_s, quantity, material_id|material_type}.
     El coste de cada uno = filamento (peso × precio/kg) + coste/hora de flota ×
-    horas. Devuelve por archivo y totales, con rango min–max de la flota.
+    horas. ``basis`` elige qué coste/hora de flota usar: 'avg' (promedio), 'max'
+    (máquina más cara, para proteger precios) o 'min' (más competitivo). Devuelve
+    por archivo y totales, con el rango min–max de la flota siempre como contexto.
     """
     price, currency = get_settings(session)
+    per_h_key = {"avg": "avg_per_h", "max": "max_per_h", "min": "min_per_h"}.get(
+        basis, "avg_per_h"
+    )
     fleet_cache: dict[str, dict | None] = {}
     out_files = []
     cost_total = cost_low = cost_high = 0.0
@@ -335,7 +340,7 @@ def estimate_project(
 
         filament = weight_g / 1000.0 * ppk
         if fleet:
-            unit = filament + fleet["avg_per_h"] * time_h
+            unit = filament + fleet[per_h_key] * time_h
             low = filament + fleet["min_per_h"] * time_h
             high = filament + fleet["max_per_h"] * time_h
         else:
@@ -364,6 +369,7 @@ def estimate_project(
     return {
         "currency": currency,
         "weighting": weighting,
+        "basis": basis,
         "files": out_files,
         "cost_total": round(cost_total, 2),
         "cost_low": round(cost_low, 2),

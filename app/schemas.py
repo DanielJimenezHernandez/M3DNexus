@@ -178,11 +178,17 @@ class ProjectFileIn(BaseModel):
 class ProjectEstimateIn(BaseModel):
     files: list[ProjectFileIn] = []
     weighting: str = "usage"
+    basis: str = "avg"   # avg | max | min (qué coste/hora de flota usar)
 
     @field_validator("weighting")
     @classmethod
     def _w(cls, v: str) -> str:
         return v if v in ("usage", "simple") else "usage"
+
+    @field_validator("basis")
+    @classmethod
+    def _b(cls, v: str) -> str:
+        return v if v in ("avg", "max", "min") else "avg"
 
 
 class ProjectPartIn(BaseModel):

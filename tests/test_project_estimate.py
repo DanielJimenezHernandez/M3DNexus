@@ -161,3 +161,16 @@ def test_material_sin_precio_marca_no_price(Session):
     assert f["no_price"] is True
     assert f["filament"] == 0.0            # sin precio → filamento 0
     assert f["unit_cost"] == pytest.approx(1.9, abs=1e-2)   # solo flota
+
+def test_basis_max_min_vs_promedio(Session):
+    s = Session
+    pla = s.query(Material).filter_by(name="PLA").one()
+    # peso 0 aísla el coste de máquina (coste/h × 1 h). Flota: min 1.4, avg 1.9, max 3.4.
+    files = [{"filename": "a", "weight_g": 0, "time_s": 3600, "quantity": 1, "material_id": pla.id}]
+    avg = estimate_project(s, files, "usage", "avg")["files"][0]["unit_cost"]
+    mx = estimate_project(s, files, "usage", "max")["files"][0]["unit_cost"]
+    mn = estimate_project(s, files, "usage", "min")["files"][0]["unit_cost"]
+    assert mx == pytest.approx(3.4, abs=0.05)   # máquina más cara (Voron)
+    assert avg == pytest.approx(1.9, abs=0.05)
+    assert mn == pytest.approx(1.4, abs=0.05)   # más barata (Ender)
+    assert mn < avg < mx

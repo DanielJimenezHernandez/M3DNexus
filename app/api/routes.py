@@ -248,9 +248,9 @@ def estimate_print(
 def estimate_project_endpoint(
     payload: ProjectEstimateIn, db: Session = Depends(get_session)
 ):
-    """Estima un proyecto multi-gcode promediando la flota (sin fijar máquina)."""
+    """Estima un proyecto multi-gcode con la flota (promedio/máx/mín, sin fijar máquina)."""
     files = [f.model_dump() for f in payload.files]
-    return estimate_project(db, files, payload.weighting)
+    return estimate_project(db, files, payload.weighting, payload.basis)
 
 
 # --------------------------------------------------------------------------- #

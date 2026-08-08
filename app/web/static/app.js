@@ -1443,11 +1443,20 @@ function renderEstFiles() {
   });
 }
 
+// Base de coste elegida → (ponderación, base) para el backend y su etiqueta.
+const EST_BASIS = {
+  max: { weighting: "usage", basis: "max", label: "máximo de flota" },
+  usage: { weighting: "usage", basis: "avg", label: "promedio ponderado" },
+  simple: { weighting: "simple", basis: "avg", label: "promedio simple" },
+  min: { weighting: "usage", basis: "min", label: "mínimo de flota" },
+};
+
 async function recalcEstimate() {
   const costHost = document.getElementById("est-cost");
   if (!estFiles.length) { costHost.innerHTML = ""; estResult = null; recalcSale(); return; }
+  const mode = EST_BASIS[vEst("est-basis")] || EST_BASIS.max;
   const body = {
-    weighting: vEst("est-weighting"),
+    weighting: mode.weighting, basis: mode.basis,
     files: estFiles.map((f) => ({
       filename: f.filename, weight_g: f.weight_g || 0, time_s: f.time_s || 0,
       // Se manda también el tipo del gcode: si no hay material de biblioteca,
@@ -1472,7 +1481,7 @@ async function recalcEstimate() {
   const spread = d.cost_high > d.cost_low + 0.005;
   costHost.innerHTML = `<div class="card">
     <div class="est-total-row">
-      <div><div class="label">Coste del producto (promedio de flota)</div>
+      <div><div class="label">Coste del producto (${mode.label})</div>
         <div class="value">${money(d.cost_total)}</div></div>
       ${spread ? `<div class="muted">según máquina: ${money(d.cost_low)} – ${money(d.cost_high)}</div>` : ""}
     </div>
@@ -1531,7 +1540,7 @@ document.getElementById("est-input").addEventListener("change", async (e) => {
   e.target.value = "";
   renderEstFiles(); recalcEstimate();
 });
-document.getElementById("est-weighting").addEventListener("change", recalcEstimate);
+document.getElementById("est-basis").addEventListener("change", recalcEstimate);
 ["est-qty", "est-rate", "est-hours", "est-postmin", "est-failure", "est-margin"].forEach((id) =>
   document.getElementById(id).addEventListener("input", recalcSale));
 
@@ -2154,21 +2163,18 @@ function renderProjectsBoard() {
     const recTxt = rec.measured_g != null
       ? `estimado ${rec.sum_parts_g} g · báscula ${rec.measured_g} g · error <b>${rec.error_pct >= 0 ? "+" : ""}${rec.error_pct}%</b> · calibración ×${rec.factor}`
       : `estimado ${rec.sum_parts_g} g · añade el peso de báscula del producto para calibrar`;
-    const parts = pr.parts.map((p) => {
-      const pname = p.name || (p.gcode_filename || "").split("/").pop() || p.material_type;
-      return `<div class="pj-part">
-        <span class="pj-pname" title="${escHtml(p.gcode_filename || "")}">${escHtml(pname)}</span>
-        <span class="muted">${escHtml(p.material_type)} · ${p.weight_g} g · ${fmtDur(p.print_time_s)}${p.quantity > 1 ? " · ×" + p.quantity : ""}${p.printer_name ? " · " + escHtml(p.printer_name) : ""}${p.no_price ? ` <span class="pill review">sin precio</span>` : ""}</span>
-        <span class="num">${money2(p.line_cost, currency)}</span>
-      </div>`;
-    }).join("");
-    return `<div class="card pj-card">
-      <div class="pj-head">${pr.photo_url ? `<img class="entity-thumb" src="${pr.photo_url}" onclick="window.open('${pr.photo_url}','_blank')" alt="" title="Foto del producto">` : ""}<strong>${escHtml(pr.name)}</strong><span class="spacer"></span>
+    const photo = pr.photo_url
+      ? `<img class="entity-thumb" src="${pr.photo_url}" onclick="window.open('${pr.photo_url}','_blank')" alt="" title="Foto del producto">` : "";
+    const parts = pr.parts.map((p) => projPartRow(p)).join("");
+    return `<div class="card order-card">
+      <div class="order-head">${photo}<strong>${escHtml(pr.name)}</strong>
+        <span class="spacer"></span>
         <span class="pj-total">${money2(pr.cost_total, currency)}</span>
         <button class="btn ghost small" data-edit-proj="${pr.id}">Editar</button>
-        <button class="btn danger small" data-del-proj="${pr.id}">✕</button></div>
+        <button class="btn danger small" data-del-proj="${pr.id}">✕</button>
+        <button class="btn ghost small" data-est-proj="${pr.id}" title="Cargar sus gcodes en la pestaña Estimación (promedio de flota)">→ Estimación</button></div>
       ${pr.notes ? `<p class="muted" style="margin:.2rem 0">${escHtml(pr.notes)}</p>` : ""}
-      <div class="pj-parts">${parts || '<span class="muted">Sin partes</span>'}</div>
+      <div class="order-items">${parts || '<span class="muted">Sin partes</span>'}</div>
       <div class="muted pj-foot">material ${money2(pr.material_cost, currency)} · máquina ${money2(pr.machine_cost, currency)} · ${recTxt}</div>
     </div>`;
   }).join("");
@@ -2179,6 +2185,75 @@ function renderProjectsBoard() {
       if (!confirm("¿Borrar proyecto?")) return;
       await api.send(`/api/projects/${b.dataset.delProj}`, "DELETE"); loadProjects();
     }));
+  host.querySelectorAll("[data-est-proj]").forEach((b) =>
+    b.addEventListener("click", () => loadProjectIntoEstimacion(projects.find((p) => p.id == b.dataset.estProj))));
+  // Parte desplegable (mismo mecanismo que las piezas de pedido).
+  host.querySelectorAll(".order-item[data-expand-part]").forEach((row) =>
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("button, a, .gcode-nav")) return;
+      row.closest(".order-item-wrap").classList.toggle("open");
+    }));
+  host.querySelectorAll("[data-goto-gcode]").forEach((el) =>
+    el.addEventListener("click", () => goToJobsForGcode(el.dataset.gotoGcode)));
+}
+
+// Una parte de proyecto con el mismo look que una pieza de pedido (desplegable).
+function projPartRow(p) {
+  const gname = (p.gcode_filename || "").split("/").pop() || p.material_type;
+  const turl = p.gcode_filename ? `/api/gcode-thumbnail?filename=${encodeURIComponent(p.gcode_filename)}` : null;
+  const smallThumb = turl
+    ? `<img class="oi-thumb" src="${turl}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'oi-thumb ph'}))">`
+    : `<div class="oi-thumb ph"></div>`;
+  const bigThumb = turl
+    ? `<img class="oi-detail-thumb" src="${turl}" loading="lazy" alt="">`
+    : `<div class="oi-detail-thumb ph"></div>`;
+  const drow = (k, v) => v == null || v === "" ? "" : `<dt>${k}</dt><dd>${v}</dd>`;
+  const gcodeCell = p.gcode_filename
+    ? `<span class="gcode-nav" data-goto-gcode="${escHtml(p.gcode_filename)}" title="Ver la última impresión">${escHtml(gname)} →</span>`
+    : escHtml(gname);
+  const detail = `<div class="oi-detail">${bigThumb}<div class="oi-detail-body"><dl class="oi-dl">
+    ${drow("Gcode", gcodeCell)}
+    ${drow("Impresora", p.printer_name ? escHtml(p.printer_name) : null)}
+    ${drow("Material", `${escHtml(p.material_type)}${p.no_price ? ' <span class="pill review">sin precio</span>' : ""}`)}
+    ${drow("Tiempo impresión", p.print_time_s ? fmtDur(p.print_time_s) : null)}
+    ${drow("Peso (báscula)", `${p.weight_g} g`)}
+    ${drow("Precio /kg", p.price_per_kg ? money2(p.price_per_kg, currency) : null)}
+    ${drow("Coste material", money2(p.material, currency))}
+    ${drow("Coste máquina", money2(p.machine, currency))}
+    ${drow("Cantidad", p.quantity)}
+    ${drow("Coste total", `<strong>${money2(p.line_cost, currency)}</strong>`)}
+  </dl></div></div>`;
+  return `<div class="order-item-wrap">
+    <div class="order-item" data-expand-part>
+      ${smallThumb}
+      <span class="oi-names"><span class="oi-name">${escHtml(gname)}</span></span>
+      <span class="muted">${escHtml(p.material_type)}${p.weight_g ? " · " + p.weight_g + " g" : ""}${p.printer_name ? " · " + escHtml(p.printer_name) : ""}${p.quantity > 1 ? " · ×" + p.quantity : ""}</span>
+      <span class="spacer"></span>
+      <span class="oi-cost muted">💲${money2(p.line_cost, currency)}</span>
+      <span class="oi-caret" aria-hidden="true">▸</span>
+    </div>
+    ${detail}
+  </div>`;
+}
+
+// Carga los gcodes de un proyecto en la pestaña Estimación (promedio de flota),
+// con el peso de báscula, el tiempo y el material de cada parte.
+async function loadProjectIntoEstimacion(pr) {
+  if (!pr) return;
+  await ensureRefs();
+  estFiles = pr.parts.map((p) => ({
+    filename: (p.gcode_filename || "").split("/").pop() || (p.material_type || "parte"),
+    weight_g: p.weight_g || 0,
+    time_s: p.print_time_s || 0,
+    filament_type: p.material_type,
+    thumb: p.gcode_filename ? `/api/gcode-thumbnail?filename=${encodeURIComponent(p.gcode_filename)}` : null,
+    material_id: pickMaterialForType(p.material_type),
+    quantity: p.quantity || 1,
+  }));
+  showTab("quote");
+  renderEstFiles();
+  recalcEstimate();
+  toast(`${estFiles.length} gcodes de “${pr.name}” cargados en Estimación`);
 }
 
 function projTypeOptions(sel) {
@@ -2192,6 +2267,7 @@ function projTypeOptions(sel) {
 
 function addProjectPart(host, pt, prepend) {
   const row = el(`<div class="pf-part">
+    <div class="pp-thumb ph" title="Miniatura del gcode"></div>
     <select class="pp-printer"><option value="">— impresora —</option>
       ${printers.map((p) => `<option value="${p.id}" ${p.id === pt.printer_id ? "selected" : ""}>${escHtml(p.name)}</option>`).join("")}</select>
     <select class="pp-gcode"><option value="">— elige impresora —</option></select>
@@ -2223,6 +2299,18 @@ async function loadPartGcodes(row) {
     files.map((f) => `<option value="${escHtml(f.path)}" ${f.path === cur ? "selected" : ""}>${escHtml(f.path)}</option>`).join("");
   if (cur && !files.some((f) => f.path === cur))
     sel.innerHTML += `<option value="${escHtml(cur)}" selected>${escHtml(cur)}</option>`;
+  updatePartThumb(row);
+}
+
+// Miniatura del gcode seleccionado en una fila de parte.
+function updatePartThumb(row) {
+  const box = row.querySelector(".pp-thumb");
+  if (!box) return;
+  const gcode = row.querySelector(".pp-gcode").value;
+  if (!gcode) { box.className = "pp-thumb ph"; box.innerHTML = ""; return; }
+  box.className = "pp-thumb";
+  box.innerHTML = `<img src="/api/gcode-thumbnail?filename=${encodeURIComponent(gcode)}" alt=""
+    onerror="this.closest('.pp-thumb').className='pp-thumb ph';this.remove()">`;
 }
 
 // Al elegir un gcode: autocompleta tipo de material y tiempo REAL del último
@@ -2244,6 +2332,7 @@ async function autofillPart(row) {
     }
     if (info.print_time_s) row.querySelector(".pp-time").value = Math.round(info.print_time_s / 60);
   }
+  updatePartThumb(row);
   projPreview(row.parentElement);
 }
 

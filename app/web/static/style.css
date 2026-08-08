@@ -343,3 +343,7 @@ td a:hover { text-decoration: underline; }
 .est-total-row { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
 .est-total-row .value { font-size: 1.5rem; font-weight: 700; }
 .est-fleet { margin-top: 0.4rem; font-size: 0.8rem; }
+
+/* Celda de material en Impresiones + selector de filamentos del gcode. */
+.mat-cell { display: flex; align-items: center; gap: 0.3rem; }
+.gcode-fils { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }

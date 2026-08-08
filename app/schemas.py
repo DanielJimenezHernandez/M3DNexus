@@ -158,6 +158,11 @@ class ProjectFileIn(BaseModel):
     def _qty(cls, v: int) -> int:
         return max(1, v)
 
+    @field_validator("weight_g", "time_s")
+    @classmethod
+    def _non_neg(cls, v: float) -> float:
+        return max(0.0, v)
+
 
 class ProjectEstimateIn(BaseModel):
     files: list[ProjectFileIn] = []

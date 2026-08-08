@@ -249,10 +249,18 @@ def fleet_cost_per_hour(
 
     hours = _machine_hours(session) if weighting == "usage" else {}
     machines = []
+    weights = []   # pesos SIN redondear, para no distorsionar el promedio
     for p in printers:
-        power, src = avg_power_w(session, p.id, material_type)
+        # Si la impresora no mide energía pero referencia a otra, se promedia
+        # sobre esa (mismo modelo que la ingesta y la estimación por máquina).
+        power_pid = p.id
+        if not p.ha_energy_entity and p.power_ref_printer_id:
+            power_pid = p.power_ref_printer_id
+        power, src = avg_power_w(session, power_pid, material_type)
         elec = power / 1000.0 * price_per_kwh
         mach = p.machine_per_hour
+        raw_w = hours.get(p.id, 0.0) if weighting == "usage" else 1.0
+        weights.append(raw_w)
         machines.append({
             "printer": p.name,
             "power_w": power,
@@ -260,10 +268,10 @@ def fleet_cost_per_hour(
             "elec_per_h": round(elec, 4),
             "machine_per_h": round(mach, 4),
             "total_per_h": round(elec + mach, 4),
-            "weight_h": round(hours.get(p.id, 0.0), 1) if weighting == "usage" else 1.0,
+            "weight_h": round(raw_w, 1),   # solo para mostrar
         })
 
-    total_w = sum(m["weight_h"] for m in machines)
+    total_w = sum(weights)
     # Se pondera solo si se pidió "usage" Y hay horas registradas; si no, media
     # plana (que la rama ponderada con pesos 1.0 también produce).
     weighted = weighting == "usage" and total_w > 0
@@ -273,9 +281,9 @@ def fleet_cost_per_hour(
         avg_elec = sum(m["elec_per_h"] for m in machines) / n
         avg_mach = sum(m["machine_per_h"] for m in machines) / n
     else:
-        avg = sum(m["total_per_h"] * m["weight_h"] for m in machines) / total_w
-        avg_elec = sum(m["elec_per_h"] * m["weight_h"] for m in machines) / total_w
-        avg_mach = sum(m["machine_per_h"] * m["weight_h"] for m in machines) / total_w
+        avg = sum(m["total_per_h"] * w for m, w in zip(machines, weights)) / total_w
+        avg_elec = sum(m["elec_per_h"] * w for m, w in zip(machines, weights)) / total_w
+        avg_mach = sum(m["machine_per_h"] * w for m, w in zip(machines, weights)) / total_w
 
     lo = min(machines, key=lambda m: m["total_per_h"])
     hi = max(machines, key=lambda m: m["total_per_h"])
@@ -308,12 +316,15 @@ def estimate_project(
     cost_total = cost_low = cost_high = 0.0
 
     for f in files:
-        weight_g = float(f.get("weight_g") or 0.0)
-        time_h = float(f.get("time_s") or 0.0) / 3600.0
+        # Acotado a >=0: un peso/tiempo negativo daría coste negativo y un rango
+        # incoherente (low > high).
+        weight_g = max(0.0, float(f.get("weight_g") or 0.0))
+        time_h = max(0.0, float(f.get("time_s") or 0.0)) / 3600.0
         qty = max(1, int(f.get("quantity") or 1))
-        material = (
-            session.get(Material, f["material_id"]) if f.get("material_id") else None
-        )
+        req_id = f.get("material_id")
+        material = session.get(Material, req_id) if req_id else None
+        # Se pidió un material que ya no existe (borrado): no se conoce su precio.
+        missing = req_id is not None and material is None
         mtype = material.material_type if material else (f.get("material_type") or None)
         ppk = material.price_per_kg if material else 0.0
 
@@ -346,7 +357,8 @@ def estimate_project(
             "line_cost": round(unit * qty, 2),
             "unit_low": round(low, 2),
             "unit_high": round(high, 2),
-            "no_price": material is not None and ppk <= 0,
+            # Sin precio de filamento: material sin precio, o uno que ya no existe.
+            "no_price": missing or (material is not None and ppk <= 0),
         })
 
     return {

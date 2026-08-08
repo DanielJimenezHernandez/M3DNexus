@@ -278,7 +278,8 @@ function renderJobsTable(rows, pmap, mById) {
         <td class="num">${fmtDur(j.print_duration_s)}</td>
         <td class="num">${j.filament_weight_g.toFixed(0)} g</td>
         <td class="num"${j.energy_estimated ? ' title="Energía estimada con la potencia media de otra impresora (no medida)"' : ""}>${j.energy_kwh != null ? (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh" : "—"}</td>
-        <td><select data-job="${j.id}" class="job-mat">${matOpts(j.material_id)}</select></td>
+        <td><div class="mat-cell"><select data-job="${j.id}" class="job-mat">${matOpts(j.material_id)}</select>
+          <button class="btn ghost small" data-gcode-fil="${j.id}" title="Filamentos del gcode (elegir cuál se usó / crear)">🧵</button></div></td>
         <td class="num"><strong>${money(j.cost_total)}</strong></td>
         <td class="row-actions">
           <button class="btn ghost small" data-recompute="${j.id}">↻</button>
@@ -310,6 +311,35 @@ function renderJobsTable(rows, pmap, mById) {
       await api.send(`/api/jobs/${b.dataset.delJob}`, "DELETE");
       loadJobs();
     }));
+  document.querySelectorAll("[data-gcode-fil]").forEach((b) =>
+    b.addEventListener("click", () => pickGcodeFilament(b)));
+}
+
+// Filamentos del gcode: para multi-material, elegir con cuál se imprimió; si no
+// existe como material, se crea al elegirlo. Resuelve el caso en que el gcode
+// lista dos filamentos y el auto-detector se quedó con el primero.
+async function pickGcodeFilament(btn) {
+  const jid = btn.dataset.gcodeFil;
+  const cell = btn.closest(".mat-cell");
+  let d;
+  try { d = await api.get(`/api/jobs/${jid}/filaments`); }
+  catch (e) { return toast("No se pudieron leer los filamentos del gcode"); }
+  if (!d.filaments.length) return toast("El gcode no lista filamentos con nombre");
+  const opts = d.filaments.map((f) => {
+    const exists = f.material_id != null;
+    const tag = exists
+      ? (f.material_id === d.current_material_id ? ` <span class="pill">actual</span>` : "")
+      : ` <span class="pill review">crear</span>`;
+    return `<button class="btn ghost small gcode-fil-opt" data-fil="${escHtml(f.name)}" data-job="${jid}">${escHtml(f.name)}${tag}</button>`;
+  }).join("");
+  cell.innerHTML = `<div class="gcode-fils">${opts}
+    <button class="btn ghost small" data-fil-cancel>✕</button></div>`;
+  cell.querySelectorAll(".gcode-fil-opt").forEach((ob) =>
+    ob.addEventListener("click", async () => {
+      await api.send(`/api/jobs/${ob.dataset.job}/set-filament`, "POST", { name: ob.dataset.fil });
+      toast("Filamento asignado"); loadJobs();
+    }));
+  cell.querySelector("[data-fil-cancel]").addEventListener("click", loadJobs);
 }
 
 // Listeners de los controles de filtro (estáticos, se registran una vez).
@@ -1087,6 +1117,7 @@ function openColorModal() {
 // sin fijar máquina; el material (por archivo) marca el filamento y la potencia.
 let estFiles = [];      // {filename, weight_g, time_s, filament_type, thumb, material_id, quantity}
 let estResult = null;   // última respuesta de /api/estimate/project
+let estSeq = 0;         // secuencia: descarta respuestas que lleguen tarde
 const vEst = (id) => document.getElementById(id).value;
 
 async function loadEstimacion() {
@@ -1154,12 +1185,16 @@ async function recalcEstimate() {
     weighting: vEst("est-weighting"),
     files: estFiles.map((f) => ({
       filename: f.filename, weight_g: f.weight_g || 0, time_s: f.time_s || 0,
-      quantity: f.quantity, material_id: f.material_id,
+      // Se manda también el tipo del gcode: si no hay material de biblioteca,
+      // la potencia usa igualmente el factor térmico del material.
+      quantity: f.quantity, material_id: f.material_id, material_type: f.filament_type,
     })),
   };
+  const seq = ++estSeq;
   let d;
   try { d = await api.send("/api/estimate/project", "POST", body); }
-  catch (e) { costHost.innerHTML = `<p class="muted">No se pudo estimar.</p>`; return; }
+  catch (e) { if (seq === estSeq) costHost.innerHTML = `<p class="muted">No se pudo estimar.</p>`; return; }
+  if (seq !== estSeq) return;   // llegó una respuesta más nueva: descarta esta
   estResult = d; currency = d.currency;
 
   d.files.forEach((fc, i) => {

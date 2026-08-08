@@ -129,6 +129,62 @@ def parse_filament(filament_name, filament_type=None) -> ParsedFilament | None:
     return ParsedFilament(full_name=full, brand=brand, material_type=mtype, color=color)
 
 
+def parse_all_filaments(metadata: dict | None, filament_type=None) -> list[ParsedFilament]:
+    """Parsea TODOS los filamentos de un gcode (multi-material incluido).
+
+    El laminador une los filamentos con ';' (con comillas): cada nombre se parea
+    con su tipo por posición. Devuelve la lista sin duplicados, en orden. Se usa
+    para dejar elegir a mano con cuál se imprimió cuando el proyecto tenía varios.
+    """
+    raw = (metadata or {}).get("filament_name")
+    if not raw:
+        return []
+    names = [n.strip().strip('"').strip() for n in str(raw).split(";")]
+    types_raw = filament_type or (metadata or {}).get("filament_type") or ""
+    types = [t.strip().strip('"').strip() for t in str(types_raw).split(";")]
+
+    out: list[ParsedFilament] = []
+    seen: set[str] = set()
+    for i, nm in enumerate(names):
+        if not nm:
+            continue
+        ftype = types[i] if i < len(types) and types[i] else (types[0] if types else None)
+        parsed = parse_filament(nm, ftype)
+        if parsed and parsed.full_name and parsed.full_name.lower() not in seen:
+            seen.add(parsed.full_name.lower())
+            out.append(parsed)
+    return out
+
+
+def get_or_create_by_parsed(
+    session: Session, parsed: ParsedFilament, filament_type=None
+) -> Material:
+    """Devuelve el Material con ese nombre; si no existe, lo crea (precio 0).
+
+    Igual que la auto-creación de la ingesta, pero disparado a mano al elegir un
+    filamento concreto del gcode. Precio 0 → queda 'a revisar' hasta ponerlo.
+    """
+    existing = session.scalar(
+        select(Material).where(func.lower(Material.name) == parsed.full_name.lower())
+    )
+    if existing:
+        return existing
+    mtype = (parsed.material_type or _first_value(filament_type) or "PLA").rstrip("+")
+    material = Material(
+        name=parsed.full_name,
+        material_type=mtype or "PLA",
+        brand=parsed.brand,
+        color=parsed.color,
+        price_per_kg=0.0,
+        density_g_cm3=density_for(parsed.material_type or filament_type),
+        active=True,
+        auto_created=True,
+    )
+    session.add(material)
+    session.flush()
+    return material
+
+
 def resolve_by_type(session: Session, filament_type) -> Material | None:
     """Material activo cuyo tipo case (comportamiento de respaldo / genérico)."""
     ft = _first_value(filament_type).strip().lower()

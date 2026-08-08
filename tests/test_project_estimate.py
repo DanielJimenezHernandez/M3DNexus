@@ -97,6 +97,58 @@ def test_estimate_project_multi_archivo(Session):
     assert d["cost_low"] < d["cost_total"] < d["cost_high"]
 
 
+def test_material_borrado_marca_no_price(Session):
+    # Un material_id que ya no existe: filamento 0 pero SE AVISA (no silencioso).
+    s = Session
+    d = estimate_project(s, [
+        {"filename": "x.gcode", "weight_g": 200, "time_s": 3600,
+         "quantity": 1, "material_id": 99999},
+    ], weighting="usage")
+    f = d["files"][0]
+    assert f["no_price"] is True
+    assert f["filament"] == 0.0
+
+
+def test_peso_y_tiempo_negativos_acotados(Session):
+    s = Session
+    pla = s.query(Material).filter_by(name="PLA").one()
+    d = estimate_project(s, [
+        {"filename": "x.gcode", "weight_g": -100, "time_s": -3600,
+         "quantity": 1, "material_id": pla.id},
+    ], weighting="usage")
+    f = d["files"][0]
+    assert f["unit_cost"] >= 0
+    assert f["unit_low"] <= f["unit_high"]   # rango coherente
+
+
+def test_ponderacion_usa_horas_crudas_no_redondeadas(tmp_path):
+    # Máquinas con uso sub-hora: el peso NO debe redondearse a décimas (eso
+    # anularía una máquina o distorsionaría el promedio).
+    engine = create_engine(f"sqlite:///{tmp_path / 'w.db'}")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    pla = Material(name="PLA", material_type="PLA", price_per_kg=0)
+    ender = Printer(name="Ender", host="1", purchase_price=1000, resale_value=0,
+                    amortization_years=1, active_days_per_year=100,
+                    active_hours_per_day=10)   # 1.0/h
+    voron = Printer(name="Voron", host="2", purchase_price=3000, resale_value=0,
+                    amortization_years=1, active_days_per_year=100,
+                    active_hours_per_day=10)   # 3.0/h
+    s.add_all([pla, ender, voron])
+    s.commit()
+    # Ender 144 s (0.04 h) · Voron 216 s (0.06 h), ambos 100 W.
+    s.add(PrintJob(printer_id=ender.id, moonraker_job_id="e", material_id=pla.id,
+                   status="completed", print_duration_s=144, energy_kwh=0.004))
+    s.add(PrintJob(printer_id=voron.id, moonraker_job_id="v", material_id=pla.id,
+                   status="completed", print_duration_s=216, energy_kwh=0.006))
+    s.commit()
+    fl = fleet_cost_per_hour(s, "PLA", price_per_kwh=4.0, weighting="usage")
+    # total/h: Ender 1.4, Voron 3.4 · ponderado por horas crudas =
+    # (1.4*0.04 + 3.4*0.06)/0.10 = 2.6  (con redondeo a décimas daría 3.4)
+    assert fl["avg_per_h"] == pytest.approx(2.6, abs=0.03)
+    s.close()
+
+
 def test_material_sin_precio_marca_no_price(Session):
     s = Session
     free = Material(name="PLA sin precio", material_type="PLA", price_per_kg=0)

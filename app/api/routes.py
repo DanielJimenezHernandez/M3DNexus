@@ -59,6 +59,7 @@ from ..services.estimate import (
     estimate_project,
 )
 from ..services.calibration import rescan_from_history
+from ..services.filament import get_or_create_by_parsed, parse_all_filaments
 from ..services.ingest import _borrow_energy, apply_costs, get_settings
 from ..services.loaded import resolve_slots, set_slots
 from ..services.orca_import import apply_import, plan_import
@@ -515,6 +516,58 @@ def assign_material(job_id: int, data: AssignMaterialIn, db: Session = Depends(g
     if data.material_id is not None and not db.get(Material, data.material_id):
         raise HTTPException(404, "Material no encontrado")
     job.material_id = data.material_id
+    _recompute(db, job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@router.get("/jobs/{job_id}/filaments")
+def job_gcode_filaments(job_id: int, db: Session = Depends(get_session)):
+    """Filamentos que lista el gcode del job (multi-material incluido).
+
+    Para elegir a mano con cuál se imprimió cuando el proyecto tenía varios. Cada
+    uno indica si ya existe como material (``material_id``) o habría que crearlo.
+    """
+    job = db.get(PrintJob, job_id)
+    if not job:
+        raise HTTPException(404, "Job no encontrado")
+    out = []
+    for p in parse_all_filaments(job.raw_metadata or {}):
+        existing = db.scalar(
+            select(Material).where(func.lower(Material.name) == p.full_name.lower())
+        )
+        out.append({
+            "name": p.full_name,
+            "brand": p.brand,
+            "material_type": p.material_type,
+            "color": p.color,
+            "material_id": existing.id if existing else None,
+            "assigned": existing is not None and existing.id == job.material_id,
+        })
+    return {"filaments": out, "current_material_id": job.material_id}
+
+
+@router.post("/jobs/{job_id}/set-filament", response_model=JobOut)
+def set_job_filament(
+    job_id: int, payload: dict = Body(...), db: Session = Depends(get_session)
+):
+    """Asigna al job uno de los filamentos del gcode, creándolo si no existe."""
+    job = db.get(PrintJob, job_id)
+    if not job:
+        raise HTTPException(404, "Job no encontrado")
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(422, "Falta 'name'")
+    parsed = next(
+        (p for p in parse_all_filaments(job.raw_metadata or {})
+         if p.full_name.lower() == name.lower()),
+        None,
+    )
+    if parsed is None:
+        raise HTTPException(404, "Ese filamento no está en el gcode")
+    material = get_or_create_by_parsed(db, parsed)
+    job.material_id = material.id
     _recompute(db, job)
     db.commit()
     db.refresh(job)

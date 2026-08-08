@@ -18,6 +18,9 @@ from ..db import get_session
 from ..integrations.homeassistant import HomeAssistantClient
 from ..integrations.moonraker import MoonrakerClient
 from ..models import (
+    ENTITY_PHOTO_MAX,
+    ENTITY_PHOTO_TYPES,
+    EntityPhoto,
     FilamentCalibration,
     MaterialPhoto,
     PHOTO_COLOR,
@@ -37,6 +40,8 @@ from ..models import (
     OrderItem,
     PrintJob,
     Printer,
+    Project,
+    ProjectPart,
     Setting,
 )
 from ..schemas import (
@@ -45,8 +50,10 @@ from ..schemas import (
     MaterialIn,
     MaterialOut,
     OrderIn,
+    OrderItemIn,
     PrinterIn,
     PrinterOut,
+    ProjectIn,
     ProjectEstimateIn,
     SettingsIn,
     SettingsOut,
@@ -63,6 +70,7 @@ from ..services.filament import get_or_create_by_parsed, parse_all_filaments
 from ..services.ingest import _borrow_energy, apply_costs, get_settings
 from ..services.loaded import resolve_slots, set_slots
 from ..services.orca_import import apply_import, plan_import
+from ..services.projects import avg_price_per_type, resolve_project
 from ..services.orders import (
     ITEM_FAILED,
     ITEM_PARTIAL,
@@ -461,7 +469,27 @@ def list_jobs(
     if needs_review is not None:
         stmt = stmt.where(PrintJob.needs_review.is_(needs_review))
     stmt = stmt.limit(limit).offset(offset)
-    return db.scalars(stmt).all()
+    jobs = db.scalars(stmt).all()
+
+    # Relación por gcode: pedidos y proyectos que usan cada archivo (deduplicado
+    # por pedido/proyecto). Se adjunta a cada job como 'in_use' para el badge.
+    refs: dict[str, dict] = {}
+    for fn, oid, client in db.execute(
+        select(OrderItem.gcode_filename, Order.id, Order.client)
+        .join(Order, OrderItem.order_id == Order.id)
+        .where(OrderItem.gcode_filename.is_not(None))
+    ).all():
+        refs.setdefault(fn, {})[("order", oid)] = client or f"Pedido {oid}"
+    for fn, pid, name in db.execute(
+        select(ProjectPart.gcode_filename, Project.id, Project.name)
+        .join(Project, ProjectPart.project_id == Project.id)
+        .where(ProjectPart.gcode_filename.is_not(None))
+    ).all():
+        refs.setdefault(fn, {})[("project", pid)] = name or f"Proyecto {pid}"
+    for j in jobs:
+        m = refs.get(j.filename, {})
+        j.in_use = [{"kind": k, "id": i, "label": lbl} for (k, i), lbl in m.items()]
+    return jobs
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
@@ -568,6 +596,36 @@ def gcode_thumbnail(filename: str, db: Session = Depends(get_session)):
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+@router.get("/gcode-info")
+def gcode_info(filename: str, printer_id: int | None = None,
+               db: Session = Depends(get_session)):
+    """Datos de la última impresión real de un gcode (para autocompletar partes).
+
+    Devuelve el tipo de material, el tiempo REAL de impresión y el peso medido
+    por el slicer. Prefiere la impresora indicada; si no hay, cualquiera.
+    """
+    q = select(PrintJob).where(
+        PrintJob.filename == filename, PrintJob.print_duration_s > 0
+    )
+    job = None
+    if printer_id is not None:
+        job = db.scalar(
+            q.where(PrintJob.printer_id == printer_id)
+            .order_by(PrintJob.end_time.desc().nulls_last())
+        )
+    if job is None:
+        job = db.scalar(q.order_by(PrintJob.end_time.desc().nulls_last()))
+    if job is None:
+        return {"found": False}
+    mat = db.get(Material, job.material_id) if job.material_id else None
+    return {
+        "found": True,
+        "material_type": mat.material_type if mat else None,
+        "print_time_s": job.print_duration_s,
+        "filament_g": job.filament_weight_g,
+    }
 
 
 @router.get("/jobs/{job_id}/filaments")
@@ -828,6 +886,7 @@ def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -
         "extra_expenses": order_expenses,
         "items": item_dicts,
         "margin": order_margin(total_cost, order.agreed_price),
+        "photo_url": _entity_first_photo(db, "order", order.id),
     }
 
 
@@ -898,15 +957,20 @@ def _apply_order(order: Order, data: OrderIn, db: Session) -> None:
     order.items.clear()
     db.flush()
     for it in data.items:
-        if it.printer_id is not None and not db.get(Printer, it.printer_id):
-            raise HTTPException(404, f"Impresora {it.printer_id} no encontrada")
-        payload = it.model_dump()
-        payload["extra_expenses"] = payload["extra_expenses"] or None
-        # El estado por copia se recorta/rellena a la cantidad (por si cambió).
-        cs = (payload.get("copy_status") or [])[: it.quantity]
-        cs += ["pending"] * (it.quantity - len(cs))
-        payload["copy_status"] = cs if any(s != "pending" for s in cs) else None
-        order.items.append(OrderItem(**payload))
+        order.items.append(_make_order_item(it, db))
+
+
+def _make_order_item(it: OrderItemIn, db: Session) -> OrderItem:
+    """Construye una OrderItem validada desde su esquema (piezas y añadidos)."""
+    if it.printer_id is not None and not db.get(Printer, it.printer_id):
+        raise HTTPException(404, f"Impresora {it.printer_id} no encontrada")
+    payload = it.model_dump()
+    payload["extra_expenses"] = payload["extra_expenses"] or None
+    # El estado por copia se recorta/rellena a la cantidad (por si cambió).
+    cs = (payload.get("copy_status") or [])[: it.quantity]
+    cs += ["pending"] * (it.quantity - len(cs))
+    payload["copy_status"] = cs if any(s != "pending" for s in cs) else None
+    return OrderItem(**payload)
 
 
 @router.post("/orders", status_code=201)
@@ -934,6 +998,17 @@ def update_order(order_id: int, data: OrderIn, db: Session = Depends(get_session
                           db, _get_setting(db, SETTING_ORDERS_FOLDER_BASE))
 
 
+@router.post("/orders/{order_id}/items", status_code=201)
+def add_order_item(order_id: int, data: OrderItemIn, db: Session = Depends(get_session)):
+    """Añade una pieza a un pedido (p.ej. desde una impresión ya hecha)."""
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Pedido no encontrado")
+    order.items.append(_make_order_item(data, db))
+    db.commit()
+    return {"ok": True, "order_id": order.id}
+
+
 @router.delete("/orders/{order_id}", status_code=204)
 def delete_order(order_id: int, db: Session = Depends(get_session)):
     order = db.get(Order, order_id)
@@ -941,6 +1016,158 @@ def delete_order(order_id: int, db: Session = Depends(get_session)):
         raise HTTPException(404, "Pedido no encontrado")
     db.delete(order)   # cascade borra sus piezas
     db.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Proyectos (desarrollo de producto: coste real por peso de báscula)
+# --------------------------------------------------------------------------- #
+def _apply_project(project: Project, data: ProjectIn) -> None:
+    project.name = data.name
+    project.notes = data.notes
+    project.total_weight_g = data.total_weight_g
+    project.parts.clear()
+    for pt in data.parts:
+        project.parts.append(ProjectPart(**pt.model_dump()))
+
+
+@router.get("/projects/material-prices")
+def project_material_prices(db: Session = Depends(get_session)):
+    """Precio medio /kg por tipo de material (para el editor de proyectos)."""
+    price, currency = get_settings(db)
+    return {"prices": avg_price_per_type(db), "currency": currency}
+
+
+@router.get("/projects")
+def list_projects(db: Session = Depends(get_session)):
+    projects = db.scalars(select(Project).order_by(Project.created_at.desc())).all()
+    return [resolve_project(db, p) for p in projects]
+
+
+@router.post("/projects", status_code=201)
+def create_project(data: ProjectIn, db: Session = Depends(get_session)):
+    project = Project(name=data.name)
+    db.add(project)
+    _apply_project(project, data)
+    db.commit()
+    db.refresh(project)
+    return resolve_project(db, project)
+
+
+@router.post("/projects/{project_id}/add-job", status_code=201)
+def add_job_to_project(
+    project_id: int, payload: dict = Body(...), db: Session = Depends(get_session)
+):
+    """Añade una impresión como parte del proyecto (para calibrar contra báscula).
+
+    La parte se rellena con el PESO ESTIMADO del slicer y el TIEMPO REAL del
+    print; el usuario luego pesa el producto completo y compara.
+    """
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Proyecto no encontrado")
+    job = db.get(PrintJob, payload.get("job_id"))
+    if not job:
+        raise HTTPException(404, "Impresión no encontrada")
+    mat = db.get(Material, job.material_id) if job.material_id else None
+    project.parts.append(ProjectPart(
+        printer_id=job.printer_id,
+        gcode_filename=job.filename,
+        material_type=(mat.material_type if mat else "PLA"),
+        weight_g=job.filament_weight_g or 0.0,     # estimado del slicer
+        print_time_s=job.print_duration_s or 0.0,  # tiempo real
+        quantity=1,
+    ))
+    db.commit()
+    return {"ok": True, "project_id": project.id}
+
+
+@router.put("/projects/{project_id}")
+def update_project(project_id: int, data: ProjectIn, db: Session = Depends(get_session)):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Proyecto no encontrado")
+    _apply_project(project, data)
+    db.commit()
+    db.refresh(project)
+    return resolve_project(db, project)
+
+
+@router.delete("/projects/{project_id}", status_code=204)
+def delete_project(project_id: int, db: Session = Depends(get_session)):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Proyecto no encontrado")
+    db.delete(project)
+    db.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Fotos de pedido / proyecto (producto terminado)
+# --------------------------------------------------------------------------- #
+def _entity_first_photo(db: Session, entity_type: str, entity_id: int) -> str | None:
+    """URL de la primera foto de un pedido/proyecto (para la tarjeta)."""
+    pid = db.scalar(
+        select(EntityPhoto.id)
+        .where(EntityPhoto.entity_type == entity_type, EntityPhoto.entity_id == entity_id)
+        .order_by(EntityPhoto.id)
+    )
+    return f"/api/entity-photos/{pid}" if pid else None
+
+
+@router.get("/entity-photos")
+def list_entity_photos(entity_type: str, entity_id: int, db: Session = Depends(get_session)):
+    if entity_type not in ENTITY_PHOTO_TYPES:
+        raise HTTPException(422, "entity_type inválido")
+    rows = db.scalars(
+        select(EntityPhoto)
+        .where(EntityPhoto.entity_type == entity_type, EntityPhoto.entity_id == entity_id)
+        .order_by(EntityPhoto.id)
+    ).all()
+    return [{"id": p.id, "url": f"/api/entity-photos/{p.id}"} for p in rows]
+
+
+@router.post("/entity-photos", status_code=201)
+def add_entity_photo(payload: dict = Body(...), db: Session = Depends(get_session)):
+    et = payload.get("entity_type")
+    eid = payload.get("entity_id")
+    if et not in ENTITY_PHOTO_TYPES:
+        raise HTTPException(422, "entity_type inválido")
+    exists = db.get(Order, eid) if et == "order" else db.get(Project, eid)
+    if not exists:
+        raise HTTPException(404, "Pedido/proyecto no encontrado")
+    count = db.scalar(
+        select(func.count(EntityPhoto.id)).where(
+            EntityPhoto.entity_type == et, EntityPhoto.entity_id == eid
+        )
+    )
+    if count >= ENTITY_PHOTO_MAX:
+        raise HTTPException(409, f"Máximo {ENTITY_PHOTO_MAX} fotos; borra alguna antes")
+    raw, ctype = _decode_data_uri(payload.get("data_uri", ""))
+    photo = EntityPhoto(entity_type=et, entity_id=eid, data=raw, content_type=ctype)
+    db.add(photo)
+    db.commit()
+    db.refresh(photo)
+    return {"id": photo.id, "url": f"/api/entity-photos/{photo.id}"}
+
+
+@router.get("/entity-photos/{photo_id}")
+def get_entity_photo(photo_id: int, db: Session = Depends(get_session)):
+    photo = db.get(EntityPhoto, photo_id)
+    if not photo:
+        raise HTTPException(404, "Foto no encontrada")
+    return Response(
+        content=photo.data,
+        media_type=photo.content_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.delete("/entity-photos/{photo_id}", status_code=204)
+def delete_entity_photo(photo_id: int, db: Session = Depends(get_session)):
+    photo = db.get(EntityPhoto, photo_id)
+    if photo:
+        db.delete(photo)
+        db.commit()
 
 
 # --------------------------------------------------------------------------- #

@@ -377,6 +377,74 @@ class OrderItem(Base):
     printer: Mapped["Printer | None"] = relationship()
 
 
+class EntityPhoto(Base):
+    """Foto del producto/pedido terminado, ligada a un pedido o proyecto.
+
+    Genérica (``entity_type`` = order|project) para no duplicar tabla: los bytes
+    van en la BD, se reescalan en el navegador antes de subir.
+    """
+
+    __tablename__ = "entity_photos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String, index=True)   # order | project
+    entity_id: Mapped[int] = mapped_column(Integer, index=True)
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    content_type: Mapped[str] = mapped_column(String, default="image/jpeg")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+ENTITY_PHOTO_TYPES = {"order", "project"}
+ENTITY_PHOTO_MAX = 8   # tope de fotos por pedido/proyecto
+
+
+class Project(Base):
+    """Proyecto de desarrollo de producto: sus partes con peso real (báscula).
+
+    Distinto de un pedido de cliente: aquí se cuadra el coste real de un producto
+    nuevo a partir del peso medido de cada parte y el promedio de precio por tipo
+    de material, más el coste de máquina según el tiempo de impresión.
+    """
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Peso medido del producto completo/ensamblado (báscula), para reconciliar
+    # contra la suma de las partes (detecta soportes, merma o partes faltantes).
+    total_weight_g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    parts: Mapped[list["ProjectPart"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class ProjectPart(Base):
+    """Una parte de un producto: tipo de material, peso real y tiempo de impresión."""
+
+    __tablename__ = "project_parts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # La parte se identifica por el gcode ya impreso (impresora + archivo), como
+    # en los pedidos; de ahí se autocompletan material y tiempo real.
+    printer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printers.id"), nullable=True
+    )
+    gcode_filename: Mapped[str | None] = mapped_column(String, nullable=True)
+    material_type: Mapped[str] = mapped_column(String, default="PLA")
+    weight_g: Mapped[float] = mapped_column(Float, default=0.0)   # real, de báscula
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    print_time_s: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    project: Mapped["Project"] = relationship(back_populates="parts")
+    printer: Mapped["Printer | None"] = relationship()
+
+
 # Estados de pago del pedido.
 PAY_PENDING = "pending"
 PAY_DEPOSIT = "deposit"

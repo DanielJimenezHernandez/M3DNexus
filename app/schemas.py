@@ -116,6 +116,8 @@ class JobOut(BaseModel):
     cost_total: float
     needs_review: bool
     has_thumbnail: bool
+    # Pedidos/proyectos que usan este gcode: [{kind, id, label}].
+    in_use: list[dict] = []
 
 
 # Logo: data URI de imagen. Se valida la forma para que no pueda romper el
@@ -181,6 +183,33 @@ class ProjectEstimateIn(BaseModel):
     @classmethod
     def _w(cls, v: str) -> str:
         return v if v in ("usage", "simple") else "usage"
+
+
+class ProjectPartIn(BaseModel):
+    name: str | None = None
+    printer_id: int | None = None
+    gcode_filename: str | None = None
+    material_type: str = "PLA"
+    weight_g: float = 0.0
+    quantity: int = 1
+    print_time_s: float = 0.0
+
+    @field_validator("quantity")
+    @classmethod
+    def _qty(cls, v: int) -> int:
+        return max(1, v)
+
+    @field_validator("weight_g", "print_time_s")
+    @classmethod
+    def _non_neg(cls, v: float) -> float:
+        return max(0.0, v)
+
+
+class ProjectIn(BaseModel):
+    name: str
+    notes: str | None = None
+    total_weight_g: float | None = None
+    parts: list[ProjectPartIn] = []
 
 
 class AssignMaterialIn(BaseModel):

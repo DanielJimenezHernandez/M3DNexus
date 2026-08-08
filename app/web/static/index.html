@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — coste de impresiones 3D</title>
-  <link rel="stylesheet" href="/style.css?v=61" />
+  <link rel="stylesheet" href="/style.css?v=70" />
 </head>
 <body>
   <header>
@@ -57,6 +57,7 @@
       </div>
       <table id="jobs-table"></table>
       <div id="mat-picker" class="modal-ov" hidden></div>
+      <div id="order-picker" class="modal-ov" hidden></div>
     </section>
 
     <!-- Printers -->
@@ -90,26 +91,47 @@
       <div id="color-modal" class="modal-ov" hidden></div>
     </section>
 
-    <!-- Pedidos -->
+    <!-- Pedidos / Proyectos -->
     <section id="pedidos" class="tab">
       <div class="toolbar">
-        <h2 style="margin:0">Pedidos</h2>
-        <select id="ped-filter">
-          <option value="open">Abiertos</option>
-          <option value="all">Todos</option>
-          <option value="printing">Imprimiendo</option>
-          <option value="printed">Listos para entregar</option>
-          <option value="delivered">Entregados</option>
-        </select>
-        <input type="search" id="ped-search" placeholder="Cliente o descripción…" />
+        <div class="seg" id="ped-mode">
+          <button data-pmode="orders" class="active">Pedidos</button>
+          <button data-pmode="projects">Proyectos</button>
+        </div>
         <span class="spacer"></span>
-        <span id="ped-summary" class="ped-summary muted"></span>
-        <button class="btn ghost small" id="ped-queue-toggle">Ver cola por impresora</button>
-        <button class="btn" id="add-order">+ Nuevo pedido</button>
       </div>
-      <div id="ped-queue" hidden></div>
-      <div id="order-form-host"></div>
-      <div id="orders-board"></div>
+
+      <!-- Modo Pedidos (clientes) -->
+      <div id="orders-mode">
+        <div class="toolbar">
+          <select id="ped-filter">
+            <option value="open">Abiertos</option>
+            <option value="all">Todos</option>
+            <option value="printing">Imprimiendo</option>
+            <option value="printed">Listos para entregar</option>
+            <option value="delivered">Entregados</option>
+          </select>
+          <input type="search" id="ped-search" placeholder="Cliente o descripción…" />
+          <span class="spacer"></span>
+          <span id="ped-summary" class="ped-summary muted"></span>
+          <button class="btn ghost small" id="ped-queue-toggle">Ver cola por impresora</button>
+          <button class="btn" id="add-order">+ Nuevo pedido</button>
+        </div>
+        <div id="ped-queue" hidden></div>
+        <div id="order-form-host"></div>
+        <div id="orders-board"></div>
+      </div>
+
+      <!-- Modo Proyectos (desarrollo de producto: coste real por báscula) -->
+      <div id="projects-mode" hidden>
+        <div class="toolbar">
+          <span class="muted" id="proj-prices"></span>
+          <span class="spacer"></span>
+          <button class="btn" id="add-project">+ Nuevo proyecto</button>
+        </div>
+        <div id="project-form-host"></div>
+        <div id="projects-board"></div>
+      </div>
     </section>
 
     <!-- Calibración de filamentos por impresora -->
@@ -266,6 +288,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=61"></script>
+  <script src="/app.js?v=70"></script>
 </body>
 </html>

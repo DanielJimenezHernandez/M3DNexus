@@ -76,6 +76,10 @@ def _migrate() -> None:
             "extra_expenses": "ALTER TABLE order_items ADD COLUMN extra_expenses JSON",
             "copy_status": "ALTER TABLE order_items ADD COLUMN copy_status JSON",
         },
+        "project_parts": {
+            "printer_id": "ALTER TABLE project_parts ADD COLUMN printer_id INTEGER",
+            "gcode_filename": "ALTER TABLE project_parts ADD COLUMN gcode_filename VARCHAR",
+        },
         "printers": {
             "orca_aliases": "ALTER TABLE printers ADD COLUMN orca_aliases JSON",
             "multicolor": "ALTER TABLE printers ADD COLUMN multicolor BOOLEAN DEFAULT 0",

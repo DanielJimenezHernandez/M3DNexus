@@ -87,7 +87,7 @@ async function goToJobsForGcode(gcodeFilename) {
 }
 
 function loadTab(name) {
-  ({ dashboard: loadDashboard, pedidos: loadPedidos, jobs: loadJobs,
+  ({ dashboard: loadDashboard, pedidos: () => setPedMode(projMode), jobs: loadJobs,
      printers: loadPrinters, materials: loadMaterials, calibracion: loadCalibracion,
      quote: loadEstimacion, cotizacion: loadCotizacion, settings: loadSettings })[name]?.();
 }
@@ -280,7 +280,7 @@ function renderJobsTable(rows, pmap, mById) {
 
   const header = `<tr>
     <th class="thumb-col"></th>
-    ${th("filename", "Archivo")}${th("printer", "Impresora")}
+    ${th("filename", "Archivo")}<th></th>${th("printer", "Impresora")}
     ${th("status", "Estado")}${th("end_time", "Fin")}${th("print_duration_s", "Duración", "num")}
     ${th("filament_weight_g", "Filam.", "num")}${th("energy_kwh", "Energía", "num")}
     <th>Material</th>${th("cost_total", "Coste", "num")}<th></th></tr>`;
@@ -298,10 +298,15 @@ function renderJobsTable(rows, pmap, mById) {
           const short = escHtml((j.filename || "—").split("/").pop());
           const pr = printers.find((p) => p.id === j.printer_id);
           const url = pr && j.filename ? klipperJobsUrl(pr) : null;
-          return url
-            ? `<td><span class="job-name gcode-open" data-open-url="${escHtml(url)}" data-gcode-name="${escHtml((j.filename || "").split("/").pop())}" title="Abrir en ${escHtml(pr.name)} y copiar el nombre">${short} ↗</span></td>`
-            : `<td class="job-name" title="${escHtml(j.filename || "")}">${short}</td>`;
+          const nameEl = url
+            ? `<span class="job-name gcode-open" data-open-url="${escHtml(url)}" data-gcode-name="${escHtml((j.filename || "").split("/").pop())}" title="Abrir en ${escHtml(pr.name)} y copiar el nombre">${short} ↗</span>`
+            : `<span class="job-name" title="${escHtml(j.filename || "")}">${short}</span>`;
+          const badges = (j.in_use && j.in_use.length)
+            ? `<div class="use-badges">${j.in_use.map((u) => `<span class="use-badge ${u.kind}" data-use-kind="${u.kind}" title="${u.kind === "order" ? "Pedido" : "Proyecto"}: ${escHtml(u.label)}">${escHtml(u.label)}</span>`).join("")}</div>`
+            : "";
+          return `<td>${nameEl}${badges}</td>`;
         })()}
+        <td class="use-cell"><button class="btn ghost small add-to-btn" data-add-order="${j.id}" title="Añadir a un pedido o proyecto">Agregar a:</button></td>
         <td>${escHtml(pmap[j.printer_id] || String(j.printer_id))}</td>
         <td><span class="pill ${j.status}">${j.status}</span>${review}</td>
         <td class="muted">${fmtDate(j.end_time)}</td>
@@ -315,7 +320,7 @@ function renderJobsTable(rows, pmap, mById) {
           <button class="btn ghost small" data-recompute="${j.id}">↻</button>
           <button class="btn danger small" data-del-job="${j.id}">✕</button>
         </td></tr>`;
-    }).join("") : `<tr><td colspan="11" class="muted">Sin resultados con estos filtros.</td></tr>`);
+    }).join("") : `<tr><td colspan="12" class="muted">Sin resultados con estos filtros.</td></tr>`);
 
   document.querySelectorAll("#jobs-table th.sortable").forEach((h) =>
     h.addEventListener("click", () => {
@@ -342,6 +347,83 @@ function renderJobsTable(rows, pmap, mById) {
     b.addEventListener("click", () => pickGcodeFilament(b)));
   document.querySelectorAll("#jobs-table [data-open-url]").forEach((el) =>
     el.addEventListener("click", () => openGcodeInUI(el)));
+  document.querySelectorAll("[data-add-order]").forEach((b) =>
+    b.addEventListener("click", () => openAddPicker(+b.dataset.addOrder)));
+  document.querySelectorAll("#jobs-table [data-use-kind]").forEach((b) =>
+    b.addEventListener("click", () => {
+      showTab("pedidos");
+      setPedMode(b.dataset.useKind === "order" ? "orders" : "projects");
+    }));
+}
+
+// --- Añadir una impresión a un PEDIDO o PROYECTO (modal con toggle) ----------
+function closeOrderPicker() { document.getElementById("order-picker").hidden = true; }
+
+async function openAddPicker(jobId) {
+  const job = allJobs.find((j) => j.id === jobId);
+  if (!job) return;
+  let ordersData, projectsData;
+  try {
+    [ordersData, projectsData] = await Promise.all([api.get("/api/orders"), api.get("/api/projects")]);
+  } catch (e) { return toast("No se pudo cargar pedidos/proyectos"); }
+  const orders = Array.isArray(ordersData) ? ordersData : (ordersData.orders || []);
+  const projects = projectsData || [];
+  const gname = (job.filename || "").split("/").pop() || "sin gcode";
+  const pmap = Object.fromEntries(printers.map((p) => [p.id, p.name]));
+  const ov = document.getElementById("order-picker");
+  let mode = "orders";
+  ov.innerHTML = `<div class="modal-box op-modal">
+    <div class="op-head">
+      <strong>Añadir a…</strong><span class="spacer"></span>
+      <button class="btn ghost small" id="op-close">✕</button>
+    </div>
+    <div class="seg op-seg" id="ap-mode">
+      <button data-m="orders" class="active">Pedido</button>
+      <button data-m="projects">Proyecto</button>
+    </div>
+    <input type="search" id="op-q" class="op-search" placeholder="Buscar…">
+    <p class="muted op-added">Se añade como pieza: <b>${escHtml(gname)}</b>${job.printer_id ? " · " + escHtml(pmap[job.printer_id] || "") : ""}</p>
+    <div class="op-list" id="op-list"></div>
+  </div>`;
+  ov.hidden = false;
+
+  const render = () => {
+    const q = (document.getElementById("op-q").value || "").toLowerCase().trim();
+    const rows = mode === "orders"
+      ? orders.filter((o) => !q || ((o.client || "") + " " + (o.description || "")).toLowerCase().includes(q))
+          .map((o) => ({ id: o.id, title: o.client || "—", extra: o.description,
+            sub: `${(ORDER_STATUS[o.status] || [o.status])[0]} · ${o.items.length} pieza(s)` }))
+      : projects.filter((p) => !q || (p.name || "").toLowerCase().includes(q))
+          .map((p) => ({ id: p.id, title: p.name, extra: p.notes,
+            sub: `${p.parts.length} parte(s) · ${money2(p.cost_total, currency)}` }));
+    document.getElementById("op-list").innerHTML = rows.length
+      ? rows.map((x) => `<button class="op-card" data-id="${x.id}">
+          <div><strong>${escHtml(x.title)}</strong> ${x.extra ? `<span class="muted">${escHtml(x.extra)}</span>` : ""}</div>
+          <div class="muted">${escHtml(x.sub)}</div></button>`).join("")
+      : `<p class="muted">Nada con ese filtro. ${mode === "projects" ? "Crea un proyecto en Pedidos → Proyectos." : ""}</p>`;
+    document.querySelectorAll(".op-card").forEach((c) =>
+      c.addEventListener("click", async () => {
+        try {
+          if (mode === "orders")
+            await api.send(`/api/orders/${c.dataset.id}/items`, "POST",
+              { printer_id: job.printer_id, gcode_filename: job.filename, quantity: 1 });
+          else
+            await api.send(`/api/projects/${c.dataset.id}/add-job`, "POST", { job_id: job.id });
+          closeOrderPicker();
+          toast(mode === "orders" ? "Añadido al pedido" : "Añadido al proyecto");
+        } catch (e) { toast("No se pudo añadir"); }
+      }));
+  };
+  render();
+  ov.querySelector("#op-close").onclick = closeOrderPicker;
+  ov.onclick = (e) => { if (e.target === ov) closeOrderPicker(); };
+  ov.querySelector("#op-q").addEventListener("input", render);
+  ov.querySelectorAll("#ap-mode button").forEach((b) =>
+    b.addEventListener("click", () => {
+      mode = b.dataset.m;
+      ov.querySelectorAll("#ap-mode button").forEach((x) => x.classList.toggle("active", x === b));
+      render();
+    }));
 }
 
 // Filamentos del gcode: para multi-material, elegir con cuál se imprimió; si no
@@ -1015,6 +1097,41 @@ function fileToDataUri(file, maxDim = 1280, quality = 0.82) {
   });
 }
 
+// Editor de fotos del producto terminado, para un pedido o proyecto.
+async function entityPhotoEditor(host, entityType, entityId) {
+  let fotos = [];
+  try { fotos = await api.get(`/api/entity-photos?entity_type=${entityType}&entity_id=${entityId}`); } catch { /* sin fotos */ }
+  host.innerHTML = `
+    <div class="photo-head"><span class="muted">${fotos.length}/8</span>
+      <button type="button" class="btn ghost small" id="ep-add" ${fotos.length >= 8 ? "disabled" : ""}>+ Foto</button>
+      <input type="file" id="ep-file" accept="image/*" multiple hidden>
+    </div>
+    <div class="photo-row">${fotos.map((f) => `<div class="photo-tile">
+      <img src="${f.url}" alt="" onclick="window.open('${f.url}','_blank')" title="Ver grande">
+      <button type="button" class="photo-del" data-del-ephoto="${f.id}" title="Quitar">✕</button>
+    </div>`).join("") || '<span class="muted">Sin fotos</span>'}</div>`;
+
+  host.querySelectorAll("[data-del-ephoto]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api.send(`/api/entity-photos/${b.dataset.delEphoto}`, "DELETE");
+      entityPhotoEditor(host, entityType, entityId);
+    }));
+  const addBtn = host.querySelector("#ep-add");
+  const fileInput = host.querySelector("#ep-file");
+  if (addBtn) addBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    const files = [...fileInput.files].slice(0, 8 - fotos.length);
+    fileInput.value = "";
+    for (const f of files) {
+      try {
+        await api.send("/api/entity-photos", "POST",
+          { entity_type: entityType, entity_id: entityId, data_uri: await fileToDataUri(f) });
+      } catch (e) { toast("Error subiendo: " + e.message); }
+    }
+    entityPhotoEditor(host, entityType, entityId);
+  });
+}
+
 async function renderPhotos(materialId, host) {
   let fotos = [];
   try { fotos = await api.get(`/api/materials/${materialId}/photos`); } catch { /* sin fotos */ }
@@ -1609,6 +1726,7 @@ function renderOrders() {
 
     return `<div class="card order-card" id="ordercard-${o.id}">
       <div class="order-head">
+        ${o.photo_url ? `<img class="entity-thumb" src="${o.photo_url}" onclick="window.open('${o.photo_url}','_blank')" alt="" title="Foto del producto">` : ""}
         <strong>#${o.id} · ${escHtml(o.client)}</strong>
         ${statusPill(ORDER_STATUS, o.status)}
         <span class="pill" style="background:var(--panel-2)">${PAY_STATUS[o.payment_status] || o.payment_status}</span>
@@ -1807,6 +1925,10 @@ function orderForm(o = {}, host = document.getElementById("order-form-host")) {
         (empaque, envío… se restan del margen)</div>
       <div id="of-expenses"></div>
     </div>
+    <div class="entity-photos">
+      <div class="muted" style="font-size:.82rem;margin:.6rem 0 .3rem"><strong>Fotos del producto terminado</strong></div>
+      <div id="of-photos">${o.id ? "" : '<span class="muted">Guarda el pedido primero para añadir fotos.</span>'}</div>
+    </div>
     <div class="row-actions" style="margin-top:1rem">
       <button class="btn" id="of-save">Guardar</button>
       <button class="btn ghost" id="of-cancel">Cancelar</button></div>
@@ -1815,6 +1937,7 @@ function orderForm(o = {}, host = document.getElementById("order-form-host")) {
   const itemsHost = host.querySelector("#of-items");
   (o.items && o.items.length ? o.items : [{}]).forEach((it) => addOrderItem(itemsHost, it));
   expenseEditor(host.querySelector("#of-expenses"), o.extra_expenses);
+  if (o.id) entityPhotoEditor(host.querySelector("#of-photos"), "order", o.id);
 
   // El monto de anticipo solo se muestra si el pago es "anticipo".
   host.querySelector("#of-pay").addEventListener("change", (e) => {
@@ -1986,11 +2109,210 @@ document.getElementById("ped-queue-toggle").addEventListener("click", toggleQueu
 // Refresco del tablero mientras se mira; se salta si hay un formulario de
 // edición abierto (arriba o dentro de una tarjeta), para no borrarlo al vuelo.
 setInterval(() => {
-  if (currentTab !== "pedidos") return;
+  if (currentTab !== "pedidos" || projMode !== "orders") return;
   // No refrescar si hay un formulario abierto o cambios de chips sin guardar.
   if (document.querySelector("#pedidos .order-edit, #pedidos .board-copies.dirty")) return;
   loadPedidos();
 }, 8000);
+
+// --- Proyectos (desarrollo de producto: coste real por peso de báscula) ------
+let projMode = "orders";
+let projects = [];
+let projPrices = {};   // {TIPO: precio medio/kg}
+
+function setPedMode(mode) {
+  projMode = mode;
+  document.querySelectorAll("#ped-mode button").forEach((b) => b.classList.toggle("active", b.dataset.pmode === mode));
+  document.getElementById("orders-mode").hidden = mode !== "orders";
+  document.getElementById("projects-mode").hidden = mode !== "projects";
+  if (mode === "projects") loadProjects(); else loadPedidos();
+}
+document.querySelectorAll("#ped-mode button").forEach((b) =>
+  b.addEventListener("click", () => setPedMode(b.dataset.pmode)));
+
+async function loadProjects() {
+  await ensureRefs();   // materiales, para la lista de tipos
+  const [list, mp] = await Promise.all([
+    api.get("/api/projects"), api.get("/api/projects/material-prices"),
+  ]);
+  projects = list; projPrices = mp.prices || {}; currency = mp.currency || currency;
+  document.getElementById("proj-prices").innerHTML = "Precio medio por tipo — " +
+    (Object.keys(projPrices).length
+      ? Object.entries(projPrices).map(([t, p]) => `${escHtml(t)} ${money(p)}/kg`).join(" · ")
+      : "sin precios en la biblioteca");
+  renderProjectsBoard();
+}
+
+function renderProjectsBoard() {
+  const host = document.getElementById("projects-board");
+  if (!projects.length) {
+    host.innerHTML = `<p class="muted">Sin proyectos. Crea uno con “+ Nuevo proyecto”: añade sus partes con el peso de báscula y su tiempo de impresión.</p>`;
+    return;
+  }
+  host.innerHTML = projects.map((pr) => {
+    const rec = pr.reconciliation;
+    const recTxt = rec.measured_g != null
+      ? `estimado ${rec.sum_parts_g} g · báscula ${rec.measured_g} g · error <b>${rec.error_pct >= 0 ? "+" : ""}${rec.error_pct}%</b> · calibración ×${rec.factor}`
+      : `estimado ${rec.sum_parts_g} g · añade el peso de báscula del producto para calibrar`;
+    const parts = pr.parts.map((p) => {
+      const pname = p.name || (p.gcode_filename || "").split("/").pop() || p.material_type;
+      return `<div class="pj-part">
+        <span class="pj-pname" title="${escHtml(p.gcode_filename || "")}">${escHtml(pname)}</span>
+        <span class="muted">${escHtml(p.material_type)} · ${p.weight_g} g · ${fmtDur(p.print_time_s)}${p.quantity > 1 ? " · ×" + p.quantity : ""}${p.printer_name ? " · " + escHtml(p.printer_name) : ""}${p.no_price ? ` <span class="pill review">sin precio</span>` : ""}</span>
+        <span class="num">${money2(p.line_cost, currency)}</span>
+      </div>`;
+    }).join("");
+    return `<div class="card pj-card">
+      <div class="pj-head">${pr.photo_url ? `<img class="entity-thumb" src="${pr.photo_url}" onclick="window.open('${pr.photo_url}','_blank')" alt="" title="Foto del producto">` : ""}<strong>${escHtml(pr.name)}</strong><span class="spacer"></span>
+        <span class="pj-total">${money2(pr.cost_total, currency)}</span>
+        <button class="btn ghost small" data-edit-proj="${pr.id}">Editar</button>
+        <button class="btn danger small" data-del-proj="${pr.id}">✕</button></div>
+      ${pr.notes ? `<p class="muted" style="margin:.2rem 0">${escHtml(pr.notes)}</p>` : ""}
+      <div class="pj-parts">${parts || '<span class="muted">Sin partes</span>'}</div>
+      <div class="muted pj-foot">material ${money2(pr.material_cost, currency)} · máquina ${money2(pr.machine_cost, currency)} · ${recTxt}</div>
+    </div>`;
+  }).join("");
+  host.querySelectorAll("[data-edit-proj]").forEach((b) =>
+    b.addEventListener("click", () => projectForm(projects.find((p) => p.id == b.dataset.editProj))));
+  host.querySelectorAll("[data-del-proj]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (!confirm("¿Borrar proyecto?")) return;
+      await api.send(`/api/projects/${b.dataset.delProj}`, "DELETE"); loadProjects();
+    }));
+}
+
+function projTypeOptions(sel) {
+  const types = [...new Set(materials.map((m) => m.material_type).filter(Boolean))].sort();
+  if (sel && !types.includes(sel)) types.push(sel);
+  return types.map((t) => {
+    const pp = projPrices[t.toUpperCase()];
+    return `<option value="${escHtml(t)}" ${t === sel ? "selected" : ""}>${escHtml(t)}${pp ? " (" + money(pp) + "/kg)" : ""}</option>`;
+  }).join("");
+}
+
+function addProjectPart(host, pt, prepend) {
+  const row = el(`<div class="pf-part">
+    <select class="pp-printer"><option value="">— impresora —</option>
+      ${printers.map((p) => `<option value="${p.id}" ${p.id === pt.printer_id ? "selected" : ""}>${escHtml(p.name)}</option>`).join("")}</select>
+    <select class="pp-gcode"><option value="">— elige impresora —</option></select>
+    <select class="pp-type" title="tipo de material">${projTypeOptions(pt.material_type || "PLA")}</select>
+    <input type="number" step="0.1" min="0" class="pp-weight" placeholder="peso g (báscula)" value="${pt.weight_g ?? ""}">
+    <input type="number" step="1" min="0" class="pp-time" placeholder="min" title="tiempo de impresión (min)" value="${pt.print_time_s ? Math.round(pt.print_time_s / 60) : ""}">
+    <input type="number" min="1" class="pp-qty" title="cantidad" value="${pt.quantity || 1}">
+    <button type="button" class="btn ghost small pp-del" title="Quitar">✕</button>
+  </div>`);
+  prepend ? host.prepend(row) : host.appendChild(row);
+  row._gcur = pt.gcode_filename || "";
+  row.querySelector(".pp-printer").addEventListener("change", () => loadPartGcodes(row));
+  row.querySelector(".pp-gcode").addEventListener("change", () => autofillPart(row));
+  if (pt.printer_id) loadPartGcodes(row);
+  row.querySelector(".pp-del").onclick = () => { row.remove(); projPreview(host); };
+}
+
+// Puebla el gcode de la parte con los archivos de la impresora (o del historial).
+async function loadPartGcodes(row) {
+  const pid = row.querySelector(".pp-printer").value;
+  const sel = row.querySelector(".pp-gcode");
+  if (!pid) { sel.innerHTML = `<option value="">— elige impresora —</option>`; return; }
+  sel.innerHTML = `<option value="">cargando…</option>`;
+  const list = async (url) => { try { const r = await api.get(url); return Array.isArray(r) ? r : null; } catch (e) { return null; } };
+  let files = await list(`/api/printers/${pid}/files`);
+  if (!files || !files.length) files = (await list(`/api/printers/${pid}/history-files`)) || [];
+  const cur = row._gcur;
+  sel.innerHTML = `<option value="">— elige gcode —</option>` +
+    files.map((f) => `<option value="${escHtml(f.path)}" ${f.path === cur ? "selected" : ""}>${escHtml(f.path)}</option>`).join("");
+  if (cur && !files.some((f) => f.path === cur))
+    sel.innerHTML += `<option value="${escHtml(cur)}" selected>${escHtml(cur)}</option>`;
+}
+
+// Al elegir un gcode: autocompleta tipo de material y tiempo REAL del último
+// print de ese gcode (el peso NO, se mide con báscula).
+async function autofillPart(row) {
+  const pid = row.querySelector(".pp-printer").value;
+  const gcode = row.querySelector(".pp-gcode").value;
+  row._gcur = gcode;
+  if (!gcode) return;
+  let info;
+  try { info = await api.get(`/api/gcode-info?printer_id=${pid}&filename=${encodeURIComponent(gcode)}`); }
+  catch (e) { return; }
+  if (info && info.found) {
+    const typeSel = row.querySelector(".pp-type");
+    if (info.material_type) {
+      if (![...typeSel.options].some((o) => o.value === info.material_type))
+        typeSel.add(new Option(info.material_type, info.material_type));
+      typeSel.value = info.material_type;
+    }
+    if (info.print_time_s) row.querySelector(".pp-time").value = Math.round(info.print_time_s / 60);
+  }
+  projPreview(row.parentElement);
+}
+
+// Previsualización de MATERIAL en vivo (instantánea); la máquina se calcula al
+// guardar (necesita el coste/hora de flota del servidor).
+function projPreview(partsHost) {
+  const box = partsHost.closest(".card").querySelector(".pf-costs");
+  let mat = 0;
+  partsHost.querySelectorAll(".pf-part").forEach((r) => {
+    const t = (r.querySelector(".pp-type").value || "").toUpperCase();
+    const w = parseFloat(r.querySelector(".pp-weight").value) || 0;
+    const q = Math.max(1, parseInt(r.querySelector(".pp-qty").value) || 1);
+    mat += w / 1000 * (projPrices[t] || 0) * q;
+  });
+  box.innerHTML = `Material (aprox): <b>${money2(mat, currency)}</b> · el coste de máquina (energía + amortización + mantenimiento) se calcula al guardar.`;
+}
+
+function projectForm(pr = {}) {
+  const host = document.getElementById("project-form-host");
+  const form = el(`<div class="card" style="margin-top:1rem">
+    <h2 style="margin-top:0">${pr.id ? "Editar" : "Nuevo"} proyecto</h2>
+    <div class="form-grid">
+      <label class="field"><span>Nombre</span><input class="pf-name" value="${escHtml(pr.name || "")}"></label>
+      <label class="field"><span>Peso del producto completo (g, báscula)</span><input type="number" step="0.1" min="0" class="pf-total" value="${pr.total_weight_g ?? ""}"></label>
+    </div>
+    <label class="field"><span>Notas</span><input class="pf-notes" value="${escHtml(pr.notes || "")}"></label>
+    <div class="pf-partshead"><span class="muted">Partes — impresora · gcode · tipo · peso (g, báscula) · tiempo (min) · cantidad</span></div>
+    <div class="pf-parts"></div>
+    <button type="button" class="btn ghost small pf-addpart">+ Añadir parte</button>
+    <div class="pf-costs muted" style="margin-top:.6rem"></div>
+    <div class="entity-photos">
+      <div class="muted" style="font-size:.82rem;margin:.6rem 0 .3rem"><strong>Fotos del producto terminado</strong></div>
+      <div class="pf-photos">${pr.id ? "" : '<span class="muted">Guarda el proyecto primero para añadir fotos.</span>'}</div>
+    </div>
+    <div class="row-actions" style="margin-top:.6rem">
+      <button class="btn pf-save">Guardar</button>
+      <button class="btn ghost pf-cancel">Cancelar</button>
+    </div>
+  </div>`);
+  host.innerHTML = ""; host.appendChild(form);
+  if (pr.id) entityPhotoEditor(form.querySelector(".pf-photos"), "project", pr.id);
+  const partsHost = form.querySelector(".pf-parts");
+  (pr.parts && pr.parts.length ? pr.parts : [{}]).forEach((pt) => addProjectPart(partsHost, pt));
+  partsHost.addEventListener("input", () => projPreview(partsHost));
+  projPreview(partsHost);
+  form.querySelector(".pf-addpart").onclick = () => { addProjectPart(partsHost, {}); projPreview(partsHost); };
+  form.querySelector(".pf-cancel").onclick = () => (host.innerHTML = "");
+  form.querySelector(".pf-save").onclick = async () => {
+    const parts = [...partsHost.querySelectorAll(".pf-part")].map((r) => ({
+      printer_id: r.querySelector(".pp-printer").value ? +r.querySelector(".pp-printer").value : null,
+      gcode_filename: r.querySelector(".pp-gcode").value || null,
+      material_type: r.querySelector(".pp-type").value || "PLA",
+      weight_g: parseFloat(r.querySelector(".pp-weight").value) || 0,
+      print_time_s: (parseFloat(r.querySelector(".pp-time").value) || 0) * 60,
+      quantity: Math.max(1, parseInt(r.querySelector(".pp-qty").value) || 1),
+    }));
+    const body = {
+      name: form.querySelector(".pf-name").value || "Proyecto",
+      notes: form.querySelector(".pf-notes").value || null,
+      total_weight_g: parseFloat(form.querySelector(".pf-total").value) || null,
+      parts,
+    };
+    try {
+      await api.send(pr.id ? `/api/projects/${pr.id}` : "/api/projects", pr.id ? "PUT" : "POST", body);
+      host.innerHTML = ""; toast("Proyecto guardado"); loadProjects();
+    } catch (e) { toast("Error: " + e.message); }
+  };
+}
+document.getElementById("add-project").addEventListener("click", () => projectForm());
 
 // --- Calibración de filamentos ----------------------------------------------
 // Matriz de qué filamento está afinado en qué impresora, y el import desde los

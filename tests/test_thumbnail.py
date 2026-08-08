@@ -62,6 +62,27 @@ def test_store_no_reintenta_si_ya_intento():
     assert c.calls == []   # ya se intentó: no vuelve a pedir
 
 
+def test_store_no_200_marca_tried():
+    # La impresora respondió pero sin miniatura (p.ej. gcode borrado): permanente.
+    rec = PrintJob(filename="x.gcode", raw_metadata=META)
+    c = FakeClient(None)   # thumbnail() devuelve (None, None)
+    assert store_thumbnail(c, rec) is False
+    assert rec.thumbnail_tried is True
+    assert not rec.has_thumbnail
+
+
+def test_store_impresora_caida_no_marca_tried():
+    # Error de transporte (apagada/sin red): transitorio, NO se marca, se reintenta.
+    class RaisingClient:
+        def thumbnail(self, path):
+            raise RuntimeError("connection refused")
+
+    rec = PrintJob(filename="x.gcode", raw_metadata=META)
+    assert store_thumbnail(RaisingClient(), rec) is False
+    assert not rec.thumbnail_tried
+    assert not rec.has_thumbnail
+
+
 @pytest.fixture
 def env(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 't.db'}")

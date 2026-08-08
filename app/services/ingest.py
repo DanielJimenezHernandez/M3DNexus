@@ -262,9 +262,16 @@ def ingest_job(
         and job.end_time is not None
         and job.end_time >= autocreate_since
     )
-    material = resolve_or_create_material(
-        session, job.metadata, job.filament_type, allow_create
-    )
+    if record is not None and record.material_manual:
+        # Material fijado a mano: se respeta tal cual, sin re-resolver por el
+        # primer filamento del gcode (clave en multi-material).
+        material = (
+            session.get(Material, record.material_id) if record.material_id else None
+        )
+    else:
+        material = resolve_or_create_material(
+            session, job.metadata, job.filament_type, allow_create
+        )
 
     # Ya resuelto y con energía: no rehacemos trabajo (ni, sobre todo, llamadas a
     # HA). Excepción: si ahora se resuelve un material CONCRETO distinto del

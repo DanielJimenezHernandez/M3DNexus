@@ -144,18 +144,21 @@ class MoonrakerClient:
             return None
 
     def thumbnail(self, gcode_path: str) -> tuple[bytes, str] | tuple[None, None]:
-        """Descarga una miniatura por su ruta relativa al root 'gcodes'."""
+        """Descarga una miniatura por su ruta relativa al root 'gcodes'.
+
+        Distingue dos fallos para quien decide si reintentar: un no-200 (la
+        miniatura ya no está en la impresora) devuelve (None, None) —permanente—;
+        un error de transporte (impresora apagada/sin red) se PROPAGA como
+        excepción —transitorio—, para no darlo por perdido.
+        """
         from urllib.parse import quote
 
         url = f"{self.base_url}/server/files/gcodes/{quote(gcode_path)}"
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.get(url)
-                if resp.status_code != 200:
-                    return None, None
-                return resp.content, resp.headers.get("content-type", "image/png")
-        except httpx.HTTPError:
-            return None, None
+        with httpx.Client(timeout=self.timeout) as client:
+            resp = client.get(url)
+            if resp.status_code != 200:
+                return None, None
+            return resp.content, resp.headers.get("content-type", "image/png")
 
     def ping(self) -> bool:
         """Comprueba conectividad con la instancia."""

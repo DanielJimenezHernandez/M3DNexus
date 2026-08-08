@@ -123,6 +123,25 @@ class TestColisionDeJobId:
         assert _mat(s, r2).name == "Elegoo PLA+ White"
         assert s.query(type(r1)).count() == 2
 
+    def test_material_manual_no_lo_pisa_el_sync(self, Session):
+        # Multi-material: el usuario elige el 2º filamento a mano; el sondeo NO
+        # debe re-resolverlo al primero en la siguiente sincronización.
+        s = Session
+        rec = _ingest(s, _job("200", "Elegoo PLA+ Black @ Voron"))
+        assert _mat(s, rec).name == "Elegoo PLA+ Black"   # auto: primer filamento
+
+        orange = Material(name="Elegoo PLA Orange", material_type="PLA", price_per_kg=312)
+        s.add(orange)
+        s.commit()
+        rec.material_id = orange.id
+        rec.material_manual = True     # elección manual
+        rec.energy_kwh = 0.05          # settled
+        s.commit()
+
+        rec2 = _ingest(s, _job("200", "Elegoo PLA+ Black @ Voron"))
+        assert rec2.id == rec.id
+        assert _mat(s, rec2).name == "Elegoo PLA Orange"   # se respeta, no vuelve a Black
+
     def test_misma_impresion_resincronizada_no_se_duplica(self, Session):
         # Mismo job_id y mismo start_time: es la MISMA impresión, no se duplica.
         s = Session

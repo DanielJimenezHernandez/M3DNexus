@@ -173,6 +173,10 @@ class PrintJob(Base):
     material_id: Mapped[int | None] = mapped_column(
         ForeignKey("materials.id"), nullable=True
     )
+    # True si el material lo fijó el usuario a mano (p.ej. eligió el 2º filamento
+    # de un gcode multi-material). Entonces el sondeo NO lo re-resuelve ni lo
+    # pisa con el primer filamento del gcode.
+    material_manual: Mapped[bool] = mapped_column(default=False)
 
     # Energía medida en HA durante la ventana de la impresión.
     energy_kwh: Mapped[float | None] = mapped_column(Float, nullable=True)

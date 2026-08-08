@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import get_config
@@ -18,10 +18,23 @@ class Base(DeclarativeBase):
 _config = get_config()
 _engine = create_engine(
     f"sqlite:///{_config.db_path}",
-    # SQLite + acceso desde el hilo de polling y desde FastAPI.
-    connect_args={"check_same_thread": False},
+    # SQLite + acceso desde el hilo de polling y desde FastAPI. ``timeout`` es el
+    # busy_timeout: una escritura concurrente ESPERA hasta 30 s por el lock en
+    # vez de fallar con "database is locked" (el sync retiene el lock mientras
+    # baja miniaturas/energía de la red).
+    connect_args={"check_same_thread": False, "timeout": 30},
     future=True,
 )
+
+
+@event.listens_for(_engine, "connect")
+def _sqlite_pragmas(dbapi_conn, _record):
+    """WAL: los lectores (p.ej. GET /jobs) no se bloquean mientras el sync
+    escribe. Y busy_timeout por conexión, por si el connect_args no bastara."""
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=30000")
+    cur.close()
 SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
 
 
@@ -50,6 +63,7 @@ def _migrate() -> None:
             "thumbnail": "ALTER TABLE print_jobs ADD COLUMN thumbnail BLOB",
             "has_thumbnail": "ALTER TABLE print_jobs ADD COLUMN has_thumbnail BOOLEAN DEFAULT 0",
             "thumbnail_tried": "ALTER TABLE print_jobs ADD COLUMN thumbnail_tried BOOLEAN DEFAULT 0",
+            "material_manual": "ALTER TABLE print_jobs ADD COLUMN material_manual BOOLEAN DEFAULT 0",
         },
         "orders": {
             "folder": "ALTER TABLE orders ADD COLUMN folder VARCHAR",

@@ -38,11 +38,17 @@ def store_thumbnail(client: MoonrakerClient, rec: PrintJob) -> bool:
     """
     if rec.has_thumbnail or rec.thumbnail_tried:
         return False
-    rec.thumbnail_tried = True
     path = thumbnail_path(rec.filename, rec.raw_metadata)
     if not path:
+        rec.thumbnail_tried = True   # el metadata no trae miniatura: permanente
         return False
-    data, _ctype = client.thumbnail(path)
+    try:
+        data, _ctype = client.thumbnail(path)
+    except Exception:  # noqa: BLE001
+        # Impresora caída/sin red (transitorio): NO se marca, se reintenta cuando
+        # vuelva. Solo un no-200 (miniatura ya no está) cuenta como definitivo.
+        return False
+    rec.thumbnail_tried = True
     if not data or len(data) > THUMBNAIL_MAX_BYTES:
         return False
     rec.thumbnail = data

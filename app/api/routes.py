@@ -527,6 +527,7 @@ def assign_material(job_id: int, data: AssignMaterialIn, db: Session = Depends(g
     if data.material_id is not None and not db.get(Material, data.material_id):
         raise HTTPException(404, "Material no encontrado")
     job.material_id = data.material_id
+    job.material_manual = True   # elección del usuario: el sync no la pisa
     _recompute(db, job)
     db.commit()
     db.refresh(job)
@@ -542,7 +543,9 @@ def job_thumbnail(job_id: int, db: Session = Depends(get_session)):
     return Response(
         content=job.thumbnail,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        # Sin 'immutable' ni caché larga: el id de job puede reusarse tras un
+        # borrado (PK entera sin AUTOINCREMENT) y mostraría la miniatura vieja.
+        headers={"Cache-Control": "public, max-age=3600"},
     )
 
 
@@ -592,6 +595,7 @@ def set_job_filament(
         raise HTTPException(404, "Ese filamento no está en el gcode")
     material = get_or_create_by_parsed(db, parsed)
     job.material_id = material.id
+    job.material_manual = True   # elección del usuario: el sync no la pisa
     _recompute(db, job)
     db.commit()
     db.refresh(job)
@@ -970,7 +974,10 @@ def thumbnail(printer_id: int, path: str, db: Session = Depends(get_session)):
     printer = db.get(Printer, printer_id)
     if not printer:
         raise HTTPException(404, "Impresora no encontrada")
-    data, ctype = MoonrakerClient(printer.moonraker_url).thumbnail(path)
+    try:
+        data, ctype = MoonrakerClient(printer.moonraker_url).thumbnail(path)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(502, "La impresora no responde")
     if not data:
         raise HTTPException(404, "Miniatura no disponible")
     return Response(

@@ -334,6 +334,55 @@ function applyJobsView() {
     `${rows.length} de ${allJobs.length} impresiones`;
 }
 
+// Impresiones desplegadas (ids): sobreviven al re-render de la tabla.
+const openJobs = new Set();
+
+// Detalle completo de una impresión + calificación (compartido tabla/tarjetas).
+function jobDetailHTML(j, pmap, mById) {
+  const mat = j.material_id != null ? mById[j.material_id] : null;
+  const drow = (k, v) => v == null || v === "" ? "" : `<dt>${k}</dt><dd>${v}</dd>`;
+  const bigThumb = j.has_thumbnail
+    ? `<img class="oi-detail-thumb" src="/api/jobs/${j.id}/thumbnail" loading="lazy" alt="">`
+    : `<div class="oi-detail-thumb ph"></div>`;
+  const energia = j.energy_kwh != null
+    ? `${j.energy_estimated ? "≈ " : ""}${j.energy_kwh.toFixed(3)} kWh${j.energy_estimated ? " (estimada)" : " (medida)"}`
+    : "sin datos";
+  const stars = Array.from({ length: 5 }, (_, i) =>
+    `<span class="${i < (j.rating || 0) ? "on" : ""}" data-star="${i + 1}">★</span>`).join("");
+  const badges = (j.in_use && j.in_use.length)
+    ? j.in_use.map((u) => `<span class="use-badge ${u.kind}" data-use-kind="${u.kind}">${escHtml(u.label)}</span>`).join(" ") : null;
+  return `<div class="oi-detail job-detail">
+    ${bigThumb}
+    <div class="oi-detail-body">
+      <dl class="oi-dl">
+        ${drow("Gcode", escHtml(j.filename || "—"))}
+        ${drow("Impresora", escHtml(pmap[j.printer_id] || String(j.printer_id)))}
+        ${drow("Estado", `<span class="pill ${j.status}">${j.status}</span>${j.needs_review ? ' <span class="pill review">revisar</span>' : ""}`)}
+        ${drow("Inicio", fmtDate(j.start_time))}
+        ${drow("Fin", fmtDate(j.end_time))}
+        ${drow("Duración", fmtDur(j.print_duration_s))}
+        ${drow("Filamento", `${j.filament_weight_g.toFixed(1)} g (${(j.filament_used_mm / 1000).toFixed(1)} m)`)}
+        ${drow("Material", mat ? `${escHtml(mat.name)} · ${money(mat.price_per_kg)}/kg` : "—")}
+        ${drow("Energía", energia)}
+        ${drow("Tarifa luz", `${money(j.tariff_per_kwh)}/kWh`)}
+        ${drow("Coste luz", money(j.cost_energy))}
+        ${drow("Coste filamento", money(j.cost_filament))}
+        ${drow("Amortización", money(j.cost_depreciation))}
+        ${drow("Mantenimiento", money(j.cost_maintenance))}
+        ${drow("Coste TOTAL", `<strong>${money(j.cost_total)}</strong>`)}
+        ${drow("En", badges)}
+      </dl>
+      <div class="job-review" data-job="${j.id}" data-rating="${j.rating || 0}">
+        <div class="review-head"><strong>Calidad de la impresión</strong>
+          <span class="muted">— ¿quedó como esperabas o necesita ajuste?</span></div>
+        <div class="stars">${stars}</div>
+        <textarea class="review-notes" rows="3" placeholder="Notas: primera capa, stringing, tolerancias, qué ajustar la próxima vez…">${escHtml(j.review_notes || "")}</textarea>
+        <button class="btn small review-save">Guardar calificación</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderJobsTable(rows, pmap, mById) {
   const arrow = (k) => (jobsSort.key === k ? (jobsSort.dir === "asc" ? " ▲" : " ▼") : "");
   const th = (k, label, cls = "") =>
@@ -353,19 +402,20 @@ function renderJobsTable(rows, pmap, mById) {
         ? `<img class="job-thumb" src="/api/jobs/${j.id}/thumbnail" loading="lazy" alt=""
              onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'job-thumb ph'}))">`
         : `<div class="job-thumb ph"></div>`;
-      return `<tr>
+      return `<tr data-job-row="${j.id}" class="${openJobs.has(j.id) ? "open" : ""}">
         <td class="thumb-col">${thumb}</td>
         ${(() => {
           const short = escHtml((j.filename || "—").split("/").pop());
           const pr = printers.find((p) => p.id === j.printer_id);
           const url = pr && j.filename ? klipperJobsUrl(pr) : null;
+          const rate = j.rating ? ` <span class="rate-ind" title="Calificación">★${j.rating}</span>` : "";
           const nameEl = url
             ? `<span class="job-name gcode-open" data-open-url="${escHtml(url)}" data-gcode-name="${escHtml((j.filename || "").split("/").pop())}" title="Abrir en ${escHtml(pr.name)} y copiar el nombre">${short} ↗</span>`
             : `<span class="job-name" title="${escHtml(j.filename || "")}">${short}</span>`;
           const badges = (j.in_use && j.in_use.length)
             ? `<div class="use-badges">${j.in_use.map((u) => `<span class="use-badge ${u.kind}" data-use-kind="${u.kind}" title="${u.kind === "order" ? "Pedido" : "Proyecto"}: ${escHtml(u.label)}">${escHtml(u.label)}</span>`).join("")}</div>`
             : "";
-          return `<td class="job-name-cell">${nameEl}${badges}</td>`;
+          return `<td class="job-name-cell">${nameEl}${rate}${badges}</td>`;
         })()}
         ${(() => {
           // Coste en ámbar si el filamento no se está cobrando (material sin
@@ -391,8 +441,52 @@ function renderJobsTable(rows, pmap, mById) {
         <td class="row-actions">
           <button class="btn ghost small" data-recompute="${j.id}">↻</button>
           <button class="btn danger small" data-del-job="${j.id}">✕</button>
-        </td></tr>`;
+        </td></tr>
+        <tr class="job-detail-tr" data-detail="${j.id}" ${openJobs.has(j.id) ? "" : "hidden"}>
+          <td colspan="12">${openJobs.has(j.id) ? jobDetailHTML(j, pmap, mById) : ""}</td>
+        </tr>`;
     }).join("") : `<tr><td colspan="12" class="muted">Sin resultados con estos filtros.</td></tr>`);
+
+  // Vista móvil: las mismas filas como tarjetas apiladas (12 columnas no caben
+  // en un teléfono). Mismos data-* que la tabla: el cableado de abajo, con
+  // ámbito #jobs, engancha ambas vistas a la vez.
+  document.getElementById("jobs-cards").innerHTML = rows.length ? rows.map((j) => {
+    const short = escHtml((j.filename || "—").split("/").pop());
+    const pr = printers.find((p) => p.id === j.printer_id);
+    const url = pr && j.filename ? klipperJobsUrl(pr) : null;
+    const thumb = j.has_thumbnail
+      ? `<img class="jc-thumb" src="/api/jobs/${j.id}/thumbnail" loading="lazy" alt="">`
+      : `<div class="jc-thumb ph"></div>`;
+    const name = url
+      ? `<span class="job-name gcode-open" data-open-url="${escHtml(url)}" data-gcode-name="${escHtml((j.filename || "").split("/").pop())}">${short} ↗</span>`
+      : `<span class="job-name">${short}</span>`;
+    const mat = j.material_id != null ? mById[j.material_id] : null;
+    const falta = (j.filament_weight_g || 0) > 0 && (!mat || (mat.price_per_kg || 0) <= 0);
+    const cost = falta
+      ? `<strong class="cost-val warn" data-fix-mat="${mat ? mat.id : ""}">${money(j.cost_total)}</strong>`
+      : `<strong class="cost-val ok">${money(j.cost_total)}</strong>`;
+    const badges = (j.in_use && j.in_use.length)
+      ? `<div class="use-badges">${j.in_use.map((u) => `<span class="use-badge ${u.kind}" data-use-kind="${u.kind}">${escHtml(u.label)}</span>`).join("")}</div>` : "";
+    return `<div class="job-card" data-job-card="${j.id}">
+      <div class="jc-top">${thumb}
+        <div class="jc-title">${name}${j.rating ? ` <span class="rate-ind">★${j.rating}</span>` : ""}${badges}</div>
+        ${cost}
+      </div>
+      <div class="jc-meta muted">
+        ${escHtml(pmap[j.printer_id] || "")} · <span class="pill ${j.status}">${j.status}</span>${j.needs_review ? ` <span class="pill review">revisar</span>` : ""}<br>
+        ${fmtDate(j.end_time)} · ${fmtDur(j.print_duration_s)} · ${j.filament_weight_g.toFixed(0)} g · ${j.energy_kwh != null ? (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh" : "— kWh"}
+      </div>
+      <div class="jc-actions">
+        <div class="mat-cell">${jobMatButton(j, mById)}
+          <button class="btn ghost small" data-gcode-fil="${j.id}">🧵</button></div>
+        <span class="spacer"></span>
+        <button class="btn ghost small" data-add-order="${j.id}">Agregar a:</button>
+        <button class="btn ghost small" data-recompute="${j.id}">↻</button>
+        <button class="btn danger small" data-del-job="${j.id}">✕</button>
+      </div>
+      <div class="jc-detail" hidden></div>
+    </div>`;
+  }).join("") : `<p class="muted">Sin resultados con estos filtros.</p>`;
 
   document.querySelectorAll("#jobs-table th.sortable").forEach((h) =>
     h.addEventListener("click", () => {
@@ -417,20 +511,80 @@ function renderJobsTable(rows, pmap, mById) {
     }));
   document.querySelectorAll("[data-gcode-fil]").forEach((b) =>
     b.addEventListener("click", () => pickGcodeFilament(b)));
-  document.querySelectorAll("#jobs-table [data-open-url]").forEach((el) =>
+  document.querySelectorAll("#jobs [data-open-url]").forEach((el) =>
     el.addEventListener("click", () => openGcodeInUI(el)));
   document.querySelectorAll("[data-add-order]").forEach((b) =>
     b.addEventListener("click", () => openAddPicker(+b.dataset.addOrder)));
-  document.querySelectorAll("#jobs-table [data-fix-mat]").forEach((b) =>
+  document.querySelectorAll("#jobs [data-fix-mat]").forEach((b) =>
     b.addEventListener("click", () => {
       if (b.dataset.fixMat) goToMaterialFix(b.dataset.fixMat);
       else toast("Asigna primero un material a esta impresión");
     }));
-  document.querySelectorAll("#jobs-table [data-use-kind]").forEach((b) =>
+  document.querySelectorAll("#jobs [data-use-kind]").forEach((b) =>
     b.addEventListener("click", () => {
       showTab("pedidos");
       setPedMode(b.dataset.useKind === "order" ? "orders" : "projects");
     }));
+
+  // --- Detalle desplegable + calificación -----------------------------------
+  const fillDetail = (container, id) => {
+    const j = allJobs.find((x) => x.id === id);
+    if (!j) return;
+    container.innerHTML = jobDetailHTML(j, pmap, mById);
+    wireReview(container);
+  };
+  const wireReview = (scope) => {
+    const box = scope.querySelector(".job-review");
+    if (!box) return;
+    const paint = (r) => box.querySelectorAll(".stars span").forEach((s, i) =>
+      s.classList.toggle("on", i < r));
+    box.querySelectorAll(".stars span").forEach((s, i) =>
+      s.addEventListener("click", () => {
+        // Pulsar la estrella actual la quita (vuelve a "sin calificar").
+        const next = (i + 1 === (+box.dataset.rating || 0)) ? 0 : i + 1;
+        box.dataset.rating = next; paint(next);
+      }));
+    box.querySelector(".review-save").addEventListener("click", async () => {
+      const id = +box.dataset.job;
+      try {
+        const j = await api.send(`/api/jobs/${id}/review`, "POST",
+          { rating: +box.dataset.rating || 0, notes: box.querySelector(".review-notes").value });
+        const loc = allJobs.find((x) => x.id === id);
+        if (loc) { loc.rating = j.rating; loc.review_notes = j.review_notes; }
+        toast("Calificación guardada");
+        applyJobsView();   // refresca el ★ de la fila; lo abierto se conserva
+      } catch (e) { toast("Error: " + e.message); }
+    });
+  };
+  // Filas ya abiertas (vienen renderizadas): cablear su calificación.
+  document.querySelectorAll("#jobs-table tr.job-detail-tr:not([hidden])").forEach(wireReview);
+  // Clic en cualquier parte del renglón (menos controles) despliega el detalle.
+  document.querySelectorAll("#jobs-table tr[data-job-row]").forEach((row) =>
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("button, a, select, input, textarea, .gcode-open, .use-badge, .cost-val.warn")) return;
+      const id = +row.dataset.jobRow;
+      const det = document.querySelector(`tr[data-detail="${id}"]`);
+      if (!det) return;
+      const willOpen = det.hidden;
+      if (willOpen && !det.firstElementChild.innerHTML.trim()) fillDetail(det.firstElementChild, id);
+      det.hidden = !willOpen;
+      row.classList.toggle("open", willOpen);
+      willOpen ? openJobs.add(id) : openJobs.delete(id);
+    }));
+  // Tarjetas móviles: mismo detalle, tocando la tarjeta.
+  document.querySelectorAll("#jobs-cards .job-card").forEach((card) => {
+    const id = +card.dataset.jobCard;
+    const det = card.querySelector(".jc-detail");
+    if (!det) return;
+    if (openJobs.has(id)) { det.hidden = false; fillDetail(det, id); }
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("button, a, select, input, textarea, .gcode-open, .use-badge, .cost-val.warn, .job-review")) return;
+      const willOpen = det.hidden;
+      if (willOpen && !det.innerHTML.trim()) fillDetail(det, id);
+      det.hidden = !willOpen;
+      willOpen ? openJobs.add(id) : openJobs.delete(id);
+    });
+  });
 }
 
 // --- Añadir una impresión a un PEDIDO o PROYECTO (modal con toggle) ----------
@@ -1125,6 +1279,27 @@ function renderMaterialsTable() {
         </td></tr>`;
     }).join("") : `<tr><td colspan="10" class="muted">Sin materiales con ese filtro</td></tr>`);
 
+  // Vista móvil: tarjetas con los mismos data-* (el cableado engancha ambas).
+  document.getElementById("materials-cards").innerHTML = filas.length ? filas.map((m) => {
+    const sw = m.color_hex ? `<span class="swatch" style="background:${escHtml(m.color_hex)}"></span>` : "";
+    const noPrice = (m.price_per_kg || 0) <= 0 ? ` <span class="pill review">poner precio</span>` : "";
+    const u = matUsage[m.id] || {};
+    return `<div class="job-card">
+      <div class="jc-top">
+        <div class="jc-title"><span class="job-name">${sw}${escHtml(m.name)}</span>
+          <div class="muted">${escHtml(m.material_type)}${m.brand ? " · " + escHtml(m.brand) : ""}${m.color ? " · " + escHtml(m.color) : ""}</div></div>
+        <strong class="cost-val ${(m.price_per_kg || 0) > 0 ? "ok" : "warn"}">${money(m.price_per_kg)}/kg</strong>
+      </div>
+      <div class="jc-meta muted">${stockDot(m.stock_level)} · ${agoLabel(u.last_used)}${noPrice}</div>
+      <div class="jc-actions">
+        ${m.purchase_url ? `<a class="btn ghost small" href="${escHtml(m.purchase_url)}" target="_blank" rel="noopener">🛒</a>` : ""}
+        <span class="spacer"></span>
+        <button class="btn ghost small" data-edit-mat="${m.id}">Editar</button>
+        <button class="btn danger small" data-del-mat="${m.id}">✕</button>
+      </div>
+    </div>`;
+  }).join("") : `<p class="muted">Sin materiales con ese filtro</p>`;
+
   document.querySelectorAll("#materials-table th[data-msort]").forEach((h) =>
     h.addEventListener("click", () => {
       const k = h.dataset.msort;
@@ -1485,10 +1660,27 @@ function estMatOptions(sel) {
 function renderEstFiles() {
   const host = document.getElementById("est-files");
   if (!estFiles.length) {
-    host.innerHTML = `<p class="muted">Sube uno o varios gcodes para empezar.</p>`;
+    host.innerHTML = `<p class="muted">Sube uno o varios gcodes para empezar (o añade un extra).</p>`;
     return;
   }
   host.innerHTML = estFiles.map((f, i) => {
+    if (f.is_extra) {
+      // Extra sin gcode (tornillería, pegamento…): 🔧 en lugar de miniatura,
+      // concepto e importe editables. Coste fijo, no depende de la flota.
+      return `<div class="card est-row" data-i="${i}">
+        <div class="est-thumb tool">🔧</div>
+        <div class="est-info">
+          <input data-est-label placeholder="Concepto (argolla, tornillería, imán…)" value="${escHtml(f.filename || "")}">
+          <div class="muted">extra POR UNIDAD producida (escala con la cantidad del producto)</div>
+        </div>
+        <label class="field est-mat" style="margin:0"><span>Precio c/u</span>
+          <input type="number" step="0.01" min="0" data-est-amount value="${f.extra_amount ?? ""}"></label>
+        <label class="field est-qty" style="margin:0"><span>Por unidad</span>
+          <input type="number" min="1" data-est-qty title="Cuántas lleva CADA unidad del producto (p.ej. 1 argolla por llavero)" value="${f.quantity}"></label>
+        <div class="est-cost num" data-est-cost></div>
+        <button class="btn danger small" data-est-del title="Quitar">✕</button>
+      </div>`;
+    }
     const thumb = f.thumb ? `<img class="est-thumb" src="${f.thumb}" alt="">` : `<div class="est-thumb"></div>`;
     const w = f.weight_g != null ? f.weight_g.toFixed(0) + " g" : "— g";
     const t = f.time_s ? fmtDur(f.time_s) : "— tiempo";
@@ -1509,8 +1701,15 @@ function renderEstFiles() {
 
   host.querySelectorAll(".est-row").forEach((row) => {
     const i = +row.dataset.i;
-    row.querySelector("[data-est-mat]").addEventListener("change", (e) => {
+    row.querySelector("[data-est-mat]")?.addEventListener("change", (e) => {
+      if (e.target.tagName !== "SELECT") return;
       estFiles[i].material_id = e.target.value ? +e.target.value : null; recalcEstimate();
+    });
+    row.querySelector("[data-est-label]")?.addEventListener("input", (e) => {
+      estFiles[i].filename = e.target.value;
+    });
+    row.querySelector("[data-est-amount]")?.addEventListener("input", (e) => {
+      estFiles[i].extra_amount = parseFloat(e.target.value) || 0; recalcEstimate();
     });
     row.querySelector("[data-est-qty]").addEventListener("input", (e) => {
       estFiles[i].quantity = Math.max(1, parseInt(e.target.value) || 1); recalcEstimate();
@@ -1533,14 +1732,21 @@ async function recalcEstimate() {
   const costHost = document.getElementById("est-cost");
   if (!estFiles.length) { costHost.innerHTML = ""; estResult = null; recalcSale(); return; }
   const mode = EST_BASIS[vEst("est-basis")] || EST_BASIS.max;
+  // gcodes y extras viajan por separado; se guarda el índice original de cada
+  // uno para pintar su coste en la fila correcta al volver la respuesta.
+  const fileIdx = [], extraIdx = [];
+  estFiles.forEach((f, i) => (f.is_extra ? extraIdx : fileIdx).push(i));
   const body = {
     weighting: mode.weighting, basis: mode.basis,
-    files: estFiles.map((f) => ({
+    files: fileIdx.map((i) => { const f = estFiles[i]; return {
       filename: f.filename, weight_g: f.weight_g || 0, time_s: f.time_s || 0,
       // Se manda también el tipo del gcode: si no hay material de biblioteca,
       // la potencia usa igualmente el factor térmico del material.
       quantity: f.quantity, material_id: f.material_id, material_type: f.filament_type,
-    })),
+    }; }),
+    extras: extraIdx.map((i) => { const f = estFiles[i]; return {
+      label: f.filename || "extra", amount: f.extra_amount || 0, quantity: f.quantity,
+    }; }),
   };
   const seq = ++estSeq;
   let d;
@@ -1549,12 +1755,15 @@ async function recalcEstimate() {
   if (seq !== estSeq) return;   // llegó una respuesta más nueva: descarta esta
   estResult = d; currency = d.currency;
 
-  d.files.forEach((fc, i) => {
-    const cell = document.querySelector(`.est-row[data-i="${i}"] [data-est-cost]`);
-    if (cell) cell.innerHTML = `${money(fc.unit_cost)}/u`
-      + `<div class="muted">×${fc.quantity} = ${money(fc.line_cost)}</div>`
-      + (fc.no_price ? `<span class="pill review">sin precio</span>` : "");
-  });
+  const paint = (rowI, html) => {
+    const cell = document.querySelector(`.est-row[data-i="${rowI}"] [data-est-cost]`);
+    if (cell) cell.innerHTML = html;
+  };
+  d.files.forEach((fc, k) => paint(fileIdx[k],
+    `${money(fc.unit_cost)}/u<div class="muted">×${fc.quantity} = ${money(fc.line_cost)}</div>`
+    + (fc.no_price ? `<span class="pill review">sin precio</span>` : "")));
+  (d.extras || []).forEach((ec, k) => paint(extraIdx[k],
+    `${money(ec.amount)}/u<div class="muted">×${ec.quantity} = ${money(ec.line_cost)}</div>`));
 
   const spread = d.cost_high > d.cost_low + 0.005;
   costHost.innerHTML = `<div class="card">
@@ -1576,6 +1785,7 @@ function estFleetNote(d) {
 
 function recalcSale() {
   const cost = estResult ? estResult.cost_total : 0;
+  const extras = estResult ? (estResult.extras_total || 0) : 0;
   const qty = Math.max(1, parseInt(vEst("est-qty")) || 1);
   const rate = parseFloat(vEst("est-rate")) || 0;
   const hours = parseFloat(vEst("est-hours")) || 0;
@@ -1583,22 +1793,32 @@ function recalcSale() {
   const failure = parseFloat(vEst("est-failure")) || 0;
   const margin = parseFloat(vEst("est-margin")) || 0;
 
-  const printing = cost * (1 + failure / 100);   // recargo por fallo/merma
+  // El recargo por fallo aplica SOLO a la parte impresa: una argolla o un imán
+  // no se pierden cuando una impresión falla.
+  const printing = (cost - extras) * (1 + failure / 100);
   const labor = hours * rate;
   const post = (postMin / 60) * rate;            // post-procesado a la misma tarifa
-  const unitCost = printing + labor + post;
-  const unitPrice = unitCost * (1 + margin / 100);   // margen sobre TODO
-  const profitUnit = unitPrice - unitCost;
+  // El margen aplica SOLO al trabajo de impresión. Los extras se repercuten a
+  // coste. Impresión, margen y extras son POR UNIDAD y escalan con la cantidad;
+  // la mano de obra y el post-procesado son del TRABAJO COMPLETO (las horas que
+  // pones son del lote entero) y entran una sola vez.
+  const marginAmt = printing * (margin / 100);          // por unidad
+  const perUnit = printing + marginAmt + extras;         // por unidad
+  const total = perUnit * qty + labor + post;            // lote completo
+  const profitTotal = marginAmt * qty;
 
   document.getElementById("est-sale").innerHTML = `<table style="margin-top:.8rem">
+    <tr><td colspan="2" class="muted" style="font-size:.78rem">Por unidad</td></tr>
     <tr><td>Coste de impresión${failure ? ` (+${failure}% fallo)` : ""}</td><td class="num">${money(printing)}</td></tr>
+    <tr><td>+ margen (${margin}% sobre la impresión)</td><td class="num">${money(marginAmt)}</td></tr>
+    ${extras ? `<tr><td>+ extras por unidad (a coste, sin margen)</td><td class="num">${money(extras)}</td></tr>` : ""}
+    <tr><td>Subtotal por unidad × ${qty}</td><td class="num">${money(perUnit * qty)}</td></tr>
+    <tr><td colspan="2" class="muted" style="font-size:.78rem">Del trabajo completo (una sola vez)</td></tr>
     <tr><td>+ mano de obra (${hours} h × ${money(rate)}/h)</td><td class="num">${money(labor)}</td></tr>
     <tr><td>+ post-procesado (${postMin} min)</td><td class="num">${money(post)}</td></tr>
-    <tr><td>Coste por unidad</td><td class="num">${money(unitCost)}</td></tr>
-    <tr><td>+ margen (${margin}%)</td><td class="num">${money(profitUnit)}</td></tr>
-    <tr><td><strong>Precio unitario</strong></td><td class="num"><strong>${money(unitPrice)}</strong></td></tr>
-    <tr><td><strong>TOTAL (${qty} ud.)</strong></td><td class="num"><strong>${money(unitPrice * qty)}</strong></td></tr>
-    <tr><td class="muted">Beneficio total</td><td class="num muted">${money(profitUnit * qty)}</td></tr>
+    <tr><td><strong>TOTAL (${qty} ud.)</strong></td><td class="num"><strong>${money(total)}</strong></td></tr>
+    <tr><td class="muted">Precio unitario efectivo</td><td class="num muted">${money(total / qty)}</td></tr>
+    <tr><td class="muted">Beneficio total (margen de impresión)</td><td class="num muted">${money(profitTotal)}</td></tr>
   </table>`;
 }
 
@@ -1619,6 +1839,101 @@ document.getElementById("est-input").addEventListener("change", async (e) => {
   renderEstFiles(); recalcEstimate();
 });
 document.getElementById("est-basis").addEventListener("change", recalcEstimate);
+// PDF de cotización PROPIO de la Estimación: misma plantilla de marca que el de
+// Cotización, pero con los datos y el modelo de esta pestaña (margen solo sobre
+// la impresión, extras a coste, mano de obra del lote una sola vez). No toca la
+// pestaña Cotización ni sus ítems.
+function printEstimacion() {
+  if (!estFiles.length || !estResult) return toast("No hay nada que cotizar");
+  const qty = Math.max(1, parseInt(vEst("est-qty")) || 1);
+  const rate = parseFloat(vEst("est-rate")) || 0;
+  const hours = parseFloat(vEst("est-hours")) || 0;
+  const postMin = parseFloat(vEst("est-postmin")) || 0;
+  const failure = parseFloat(vEst("est-failure")) || 0;
+  const margin = parseFloat(vEst("est-margin")) || 0;
+
+  // Reconstruye el mismo cálculo de recalcSale, pero por línea: a cada gcode su
+  // parte de margen; los extras a coste; el trabajo del lote aparte.
+  const extrasTotal = estResult.extras_total || 0;
+  const labor = hours * rate;
+  const post = (postMin / 60) * rate;
+  const failMul = 1 + failure / 100;
+  const marMul = 1 + margin / 100;
+
+  const conThumb = estFiles.some((f) => f.thumb);
+  let unidadesTot = 0;
+  const filaIdx = { f: 0, e: 0 };
+  const filas = estFiles.map((f, i) => {
+    let nombre, tipo, unit, unitsPerProd;
+    if (f.is_extra) {
+      const ec = (estResult.extras || [])[filaIdx.e++] || {};
+      nombre = `🔧 ${f.filename || "extra"}`;
+      tipo = "extra";
+      unit = ec.amount || f.extra_amount || 0;      // a coste, sin margen
+      unitsPerProd = f.quantity || 1;
+    } else {
+      const fc = (estResult.files || [])[filaIdx.f++] || {};
+      nombre = f.filename || "pieza";
+      tipo = fc.material || f.filament_type || "—";
+      // unitario del PDF = coste de impresión con fallo y margen aplicados
+      unit = (fc.unit_cost || 0) * failMul * marMul;
+      unitsPerProd = f.quantity || 1;
+    }
+    const cant = unitsPerProd * qty;
+    unidadesTot += cant;
+    const thumb = f.thumb ? `<img src="${escHtml(f.thumb)}" alt="">` : "";
+    return `<tr>
+      ${conThumb ? `<td class="thumb">${f.is_extra ? "🔧" : thumb}</td>` : ""}
+      <td>${i + 1}. ${escHtml(nombre)}</td>
+      <td>${escHtml(String(tipo))}</td>
+      <td class="num">${money(unit)}</td>
+      <td class="num">${cant}</td>
+      <td class="num">${money(unit * cant)}</td>
+    </tr>`;
+  }).join("");
+
+  const printedBase = (estResult.cost_total - extrasTotal) * failMul;
+  const marginAmt = printedBase * (margin / 100);
+  const perUnit = printedBase + marginAmt + extrasTotal;
+  const total = perUnit * qty + labor + post;
+  const s = appSettings || {};
+  const qnum = "E-" + Math.random().toString(16).slice(2, 8).toUpperCase();
+  const cliente = "";
+
+  const trabajoRows =
+    (labor > 0 ? `<tr><td>Mano de obra (${hours} h)</td><td class="num">${money(labor)}</td></tr>` : "") +
+    (post > 0 ? `<tr><td>Post-procesado (${postMin} min)</td><td class="num">${money(post)}</td></tr>` : "");
+
+  printDoc(`Cotización ${qnum}`, `
+    ${brandHead(s, "Impresión 3D", "Cotización")}
+    <div class="meta">
+      <span><strong>Cotización #:</strong> ${qnum}</span>
+      ${cliente ? `<span><strong>Cliente:</strong> ${escHtml(cliente)}</span>` : ""}
+      <span><strong>Fecha:</strong> ${new Date().toLocaleDateString()}</span>
+      <span><strong>Piezas:</strong> ${unidadesTot}</span>
+    </div>
+    <table>
+      <tr>${conThumb ? "<th></th>" : ""}<th>Descripción</th><th>Material</th>
+          <th class="num">Costo unitario</th><th class="num">Cantidad</th><th class="num">Total</th></tr>
+      ${filas}
+    </table>
+    <table class="totals">
+      <tr><td>Sub-Total piezas (${qty} producto${qty > 1 ? "s" : ""})</td><td class="num">${money(perUnit * qty)}</td></tr>
+      ${trabajoRows}
+      <tr class="grand"><td>Total</td><td class="num">${money(total)}</td></tr>
+    </table>
+    ${brandTerms(s)}
+    <div class="foot">${escHtml(s.company_name || "M3D Nexus")} — Transforma tus ideas en realidad con impresión 3D</div>
+  `);
+}
+document.getElementById("est-to-quote").addEventListener("click", printEstimacion);
+
+document.getElementById("est-add-extra").addEventListener("click", () => {
+  estFiles.push({ is_extra: true, filename: "", extra_amount: 0, quantity: 1 });
+  renderEstFiles(); recalcEstimate();
+  // El concepto vacío está listo para teclear.
+  document.querySelector(`.est-row[data-i="${estFiles.length - 1}"] [data-est-label]`)?.focus();
+});
 ["est-qty", "est-rate", "est-hours", "est-postmin", "est-failure", "est-margin"].forEach((id) =>
   document.getElementById(id).addEventListener("input", recalcSale));
 
@@ -2273,7 +2588,17 @@ function renderProjectsBoard() {
       : `estimado ${rec.sum_parts_g} g · añade el peso de báscula del producto para calibrar`;
     const photo = pr.photo_url
       ? `<img class="entity-thumb" src="${pr.photo_url}" onclick="window.open('${pr.photo_url}','_blank')" alt="" title="Foto del producto">` : "";
-    const parts = pr.parts.map((p) => projPartRow(p)).join("");
+    const parts = pr.parts.map((p) => projPartRow(p)).join("")
+      // Gastos extra como filas propias, con 🔧 en lugar de miniatura.
+      + (pr.extra_expenses || []).map((e) => `<div class="order-item-wrap">
+          <div class="order-item">
+            <div class="oi-thumb tool">🔧</div>
+            <span class="oi-names"><span class="oi-name">${escHtml(e.label || "extra")}</span></span>
+            <span class="muted">extra${(e.quantity || 1) > 1 ? " · ×" + e.quantity : ""}</span>
+            <span class="spacer"></span>
+            <span class="oi-cost cost-val ok">${money2((e.amount || 0) * (e.quantity || 1), currency)}</span>
+          </div>
+        </div>`).join("");
     return `<div class="card order-card">
       <div class="order-head">${photo}<strong>${escHtml(pr.name)}</strong>
         <span class="spacer"></span>
@@ -2283,7 +2608,7 @@ function renderProjectsBoard() {
         <button class="btn ghost small" data-est-proj="${pr.id}" title="Cargar sus gcodes en la pestaña Estimación (promedio de flota)">→ Estimación</button></div>
       ${pr.notes ? `<p class="muted" style="margin:.2rem 0">${escHtml(pr.notes)}</p>` : ""}
       <div class="order-items">${parts || '<span class="muted">Sin partes</span>'}</div>
-      <div class="muted pj-foot">material ${money2(pr.material_cost, currency)} · máquina ${money2(pr.machine_cost, currency)} · ${recTxt}</div>
+      <div class="muted pj-foot">material ${money2(pr.material_cost, currency)} · máquina ${money2(pr.machine_cost, currency)}${pr.extras_cost ? ` · extras ${money2(pr.extras_cost, currency)}` : ""} · ${recTxt}</div>
     </div>`;
   }).join("");
   host.querySelectorAll("[data-edit-proj]").forEach((b) =>
@@ -2372,7 +2697,12 @@ async function loadProjectIntoEstimacion(pr) {
     thumb: p.gcode_filename ? `/api/gcode-thumbnail?filename=${encodeURIComponent(p.gcode_filename)}` : null,
     material_id: pickMaterialForType(p.material_type),
     quantity: p.quantity || 1,
-  }));
+  }))
+  // Los gastos extra del proyecto viajan como partes extra (🔧, coste fijo).
+  .concat((pr.extra_expenses || []).map((e) => ({
+    is_extra: true, filename: e.label || "extra",
+    extra_amount: e.amount || 0, quantity: e.quantity || 1,
+  })));
   showTab("quote");
   renderEstFiles();
   recalcEstimate();
@@ -2491,6 +2821,11 @@ function projectForm(pr = {}) {
     <div class="pf-partshead"><span class="muted">Partes — impresora · gcode · tipo · peso (g, báscula) · tiempo (min) · cantidad</span></div>
     <div class="pf-parts"></div>
     <button type="button" class="btn ghost small pf-addpart">+ Añadir parte</button>
+    <div class="order-expenses">
+      <div class="muted" style="font-size:.82rem;margin:.6rem 0 .3rem"><strong>Gastos extra del producto</strong>
+        (tornillería, pegamento, piezas compradas…)</div>
+      <div class="pf-expenses"></div>
+    </div>
     <div class="pf-costs muted" style="margin-top:.6rem"></div>
     <div class="entity-photos">
       <div class="muted" style="font-size:.82rem;margin:.6rem 0 .3rem"><strong>Fotos del producto terminado</strong></div>
@@ -2508,6 +2843,7 @@ function projectForm(pr = {}) {
   }
   const partsHost = form.querySelector(".pf-parts");
   (pr.parts && pr.parts.length ? pr.parts : [{}]).forEach((pt) => addProjectPart(partsHost, pt));
+  expenseEditor(form.querySelector(".pf-expenses"), pr.extra_expenses);
   partsHost.addEventListener("input", () => projPreview(partsHost));
   projPreview(partsHost);
   form.querySelector(".pf-addpart").onclick = () => { addProjectPart(partsHost, {}); projPreview(partsHost); };
@@ -2525,6 +2861,7 @@ function projectForm(pr = {}) {
       name: form.querySelector(".pf-name").value || "Proyecto",
       notes: form.querySelector(".pf-notes").value || null,
       total_weight_g: parseFloat(form.querySelector(".pf-total").value) || null,
+      extra_expenses: readExpenses(form.querySelector(".pf-expenses")),
       parts,
     };
     try {
@@ -3460,7 +3797,138 @@ document.getElementById("bulk-gcode").addEventListener("change", async (ev) => {
   await addItemsFromFiles(ev.target.files, vacio);
   ev.target.value = "";
 });
-document.getElementById("print-quote").addEventListener("click", printCotiz);
+document.getElementById("print-quote").addEventListener("click", () =>
+  cotizMode === "venta" ? printVenta() : printCotiz());
+
+// --- Venta directa: paquetes predeterminados con precio manual ---------------
+// Reutiliza el motor del PDF (printDoc + plantilla de marca) pero con ítems
+// manuales: foto, descripción y precio de venta, más envío e IVA.
+let cotizMode = "quote";
+document.querySelectorAll("#cotiz-mode button").forEach((b) =>
+  b.addEventListener("click", () => {
+    cotizMode = b.dataset.cmode;
+    document.querySelectorAll("#cotiz-mode button").forEach((x) =>
+      x.classList.toggle("active", x === b));
+    document.getElementById("quote-mode").hidden = cotizMode !== "quote";
+    document.getElementById("venta-mode").hidden = cotizMode !== "venta";
+    if (cotizMode === "venta") {
+      if (!document.querySelector("#venta-items .venta-item")) addVentaItem();
+      recalcVenta();
+    } else recalcQuote();
+  }));
+
+const ventaItems = () => [...document.querySelectorAll("#venta-items .venta-item")];
+
+function addVentaItem() {
+  const item = el(`<div class="card venta-item">
+    <div class="item-body">
+      <div class="v-thumbwrap">
+        <div class="q-thumb placeholder"></div>
+        <button type="button" class="btn ghost small v-photo-btn">+ Foto</button>
+        <input type="file" class="v-photo" accept="image/*" hidden>
+      </div>
+      <div class="item-fields">
+        <div class="form-grid">
+          <label class="field"><span>Ítem / paquete</span><input class="v-desc" placeholder="Paquete 10 recuerditos personalizados"></label>
+          <label class="field"><span>Precio de venta (c/u)</span><input type="number" step="0.01" min="0" class="v-price" value="0"></label>
+          <label class="field"><span>Cantidad</span><input type="number" min="1" class="v-qty" value="1"></label>
+        </div>
+        <div class="muted v-line"></div>
+      </div>
+      <button type="button" class="btn danger small v-remove">Quitar</button>
+    </div>
+  </div>`);
+  document.getElementById("venta-items").appendChild(item);
+  const photoInput = item.querySelector(".v-photo");
+  item.querySelector(".v-photo-btn").addEventListener("click", () => photoInput.click());
+  photoInput.addEventListener("change", async () => {
+    const f = photoInput.files[0];
+    photoInput.value = "";
+    if (!f) return;
+    try {
+      item._thumb = await fileToDataUri(f, 640, 0.85);
+      item.querySelector(".v-thumbwrap .q-thumb").outerHTML =
+        `<img class="q-thumb" src="${item._thumb}" alt="">`;
+    } catch (e) { toast("No se pudo leer la imagen"); }
+  });
+  item.querySelectorAll(".v-desc, .v-price, .v-qty").forEach((i) =>
+    i.addEventListener("input", recalcVenta));
+  item.querySelector(".v-remove").addEventListener("click", () => { item.remove(); recalcVenta(); });
+}
+document.getElementById("v-add-item").addEventListener("click", addVentaItem);
+["v-envio", "v-iva"].forEach((id) =>
+  document.getElementById(id).addEventListener("input", recalcVenta));
+
+function ventaTotals() {
+  const lines = ventaItems().map((item) => {
+    const price = parseFloat(item.querySelector(".v-price").value) || 0;
+    const qty = Math.max(1, parseInt(item.querySelector(".v-qty").value) || 1);
+    return { item, desc: item.querySelector(".v-desc").value, price, qty, total: price * qty };
+  }).filter((l) => l.desc || l.price);
+  const subtotal = lines.reduce((a, l) => a + l.total, 0);
+  const envio = parseFloat(document.getElementById("v-envio").value) || 0;
+  const ivaPct = parseFloat(document.getElementById("v-iva").value) || 0;
+  const iva = (subtotal + envio) * (ivaPct / 100);
+  return { lines, subtotal, envio, ivaPct, iva, total: subtotal + envio + iva };
+}
+
+function recalcVenta() {
+  if (cotizMode !== "venta") return;
+  const v = ventaTotals();
+  ventaItems().forEach((item) => {
+    const price = parseFloat(item.querySelector(".v-price").value) || 0;
+    const qty = Math.max(1, parseInt(item.querySelector(".v-qty").value) || 1);
+    item.querySelector(".v-line").textContent =
+      price ? `${money(price)} × ${qty} = ${money(price * qty)}` : "";
+  });
+  document.getElementById("venta-summary").innerHTML = `<table>
+    <tr><td>Sub-Total (${v.lines.length} ítems)</td><td class="num">${money(v.subtotal)}</td></tr>
+    <tr><td>Servicio de envío</td><td class="num">${money(v.envio)}</td></tr>
+    <tr><td>IVA (${v.ivaPct}%)</td><td class="num">${money(v.iva)}</td></tr>
+    <tr><td><strong>Total</strong></td><td class="num"><strong>${money(v.total)}</strong></td></tr>
+  </table>`;
+  document.querySelector("#cotiz-bar .q-total").innerHTML =
+    `<span class="bar-total">${money(v.total)}</span> <span class="bar-detail muted">venta directa</span>`;
+}
+
+function printVenta() {
+  const v = ventaTotals();
+  if (!v.lines.length) return toast("Añade al menos un ítem con precio");
+  const s = appSettings || {};
+  const cliente = document.getElementById("v-cliente").value;
+  const qnum = "V-" + Math.random().toString(16).slice(2, 8).toUpperCase();
+  const conThumb = v.lines.some((l) => l.item._thumb);
+  const filas = v.lines.map((l, i) => `<tr>
+      ${conThumb ? `<td class="thumb">${l.item._thumb ? `<img src="${escHtml(l.item._thumb)}" alt="">` : ""}</td>` : ""}
+      <td>${i + 1}. ${escHtml(l.desc || "Producto")}</td>
+      <td class="num">${money(l.price)}</td>
+      <td class="num">${l.qty}</td>
+      <td class="num">${money(l.total)}</td>
+    </tr>`).join("");
+
+  printDoc(`Cotización ${qnum}`, `
+    ${brandHead(s, "Impresión 3D", "Cotización")}
+    <div class="meta">
+      <span><strong>Cotización #:</strong> ${qnum}</span>
+      ${cliente ? `<span><strong>Cliente:</strong> ${escHtml(cliente)}</span>` : ""}
+      <span><strong>Fecha:</strong> ${new Date().toLocaleDateString()}</span>
+      <span><strong>Piezas:</strong> ${v.lines.reduce((a, l) => a + l.qty, 0)}</span>
+    </div>
+    <table>
+      <tr>${conThumb ? "<th></th>" : ""}<th>Descripción</th>
+          <th class="num">Precio unitario</th><th class="num">Cantidad</th><th class="num">Total</th></tr>
+      ${filas}
+    </table>
+    <table class="totals">
+      <tr><td>Sub-Total</td><td class="num">${money(v.subtotal)}</td></tr>
+      <tr><td>Servicio de envío</td><td class="num">${money(v.envio)}</td></tr>
+      <tr><td>IVA (${v.ivaPct}%)</td><td class="num">${money(v.iva)}</td></tr>
+      <tr class="grand"><td>Total</td><td class="num">${money(v.total)}</td></tr>
+    </table>
+    ${brandTerms(s)}
+    <div class="foot">${escHtml(s.company_name || "M3D Nexus")} — Transforma tus ideas en realidad con impresión 3D</div>
+  `);
+}
 
 function printCotiz() {
   const items = allItems();

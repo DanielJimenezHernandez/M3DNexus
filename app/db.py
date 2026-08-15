@@ -64,6 +64,8 @@ def _migrate() -> None:
             "has_thumbnail": "ALTER TABLE print_jobs ADD COLUMN has_thumbnail BOOLEAN DEFAULT 0",
             "thumbnail_tried": "ALTER TABLE print_jobs ADD COLUMN thumbnail_tried BOOLEAN DEFAULT 0",
             "material_manual": "ALTER TABLE print_jobs ADD COLUMN material_manual BOOLEAN DEFAULT 0",
+            "rating": "ALTER TABLE print_jobs ADD COLUMN rating INTEGER",
+            "review_notes": "ALTER TABLE print_jobs ADD COLUMN review_notes VARCHAR",
         },
         "orders": {
             "folder": "ALTER TABLE orders ADD COLUMN folder VARCHAR",
@@ -79,6 +81,9 @@ def _migrate() -> None:
         "project_parts": {
             "printer_id": "ALTER TABLE project_parts ADD COLUMN printer_id INTEGER",
             "gcode_filename": "ALTER TABLE project_parts ADD COLUMN gcode_filename VARCHAR",
+        },
+        "projects": {
+            "extra_expenses": "ALTER TABLE projects ADD COLUMN extra_expenses JSON",
         },
         "printers": {
             "orca_aliases": "ALTER TABLE printers ADD COLUMN orca_aliases JSON",

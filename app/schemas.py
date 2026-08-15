@@ -116,6 +116,8 @@ class JobOut(BaseModel):
     cost_total: float
     needs_review: bool
     has_thumbnail: bool
+    rating: int | None
+    review_notes: str | None
     # Pedidos/proyectos que usan este gcode: [{kind, id, label}].
     in_use: list[dict] = []
 
@@ -156,6 +158,22 @@ class SettingsIn(BaseModel):
         return v
 
 
+class ExpenseIn(BaseModel):
+    label: str
+    amount: float = 0.0      # precio por unidad
+    quantity: int = 1
+
+    @field_validator("amount")
+    @classmethod
+    def _amount(cls, v: float) -> float:
+        return max(0.0, v)
+
+    @field_validator("quantity")
+    @classmethod
+    def _qty(cls, v: int) -> int:
+        return max(1, v)
+
+
 class ProjectFileIn(BaseModel):
     filename: str | None = None
     weight_g: float = 0.0
@@ -177,6 +195,8 @@ class ProjectFileIn(BaseModel):
 
 class ProjectEstimateIn(BaseModel):
     files: list[ProjectFileIn] = []
+    # Extras sin gcode (tornillería, pegamento, piezas compradas…): coste fijo.
+    extras: list[ExpenseIn] = []
     weighting: str = "usage"
     basis: str = "avg"   # avg | max | min (qué coste/hora de flota usar)
 
@@ -215,27 +235,12 @@ class ProjectIn(BaseModel):
     name: str
     notes: str | None = None
     total_weight_g: float | None = None
+    extra_expenses: list[ExpenseIn] = []
     parts: list[ProjectPartIn] = []
 
 
 class AssignMaterialIn(BaseModel):
     material_id: int | None
-
-
-class ExpenseIn(BaseModel):
-    label: str
-    amount: float = 0.0      # precio por unidad
-    quantity: int = 1
-
-    @field_validator("amount")
-    @classmethod
-    def _amount(cls, v: float) -> float:
-        return max(0.0, v)
-
-    @field_validator("quantity")
-    @classmethod
-    def _qty(cls, v: int) -> int:
-        return max(1, v)
 
 
 class OrderItemIn(BaseModel):

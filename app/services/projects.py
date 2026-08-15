@@ -72,6 +72,10 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
             "line_cost": round(unit * qty, 2),
         })
 
+    # Gastos extra (tornillería, pegamento, piezas compradas…): coste directo.
+    expenses = list(project.extra_expenses or [])
+    extras_cost = sum((e.get("amount") or 0) * (e.get("quantity") or 1) for e in expenses)
+
     measured = project.total_weight_g
     have = measured and weight_total > 0
     reconciliation = {
@@ -99,8 +103,10 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
         "created_at": project.created_at,
         "photo_url": f"/api/entity-photos/{first_photo}" if first_photo else None,
         "parts": parts_out,
+        "extra_expenses": expenses,
+        "extras_cost": round(extras_cost, 2),
         "material_cost": round(mat_total, 2),
         "machine_cost": round(mach_total, 2),
-        "cost_total": round(mat_total + mach_total, 2),
+        "cost_total": round(mat_total + mach_total + extras_cost, 2),
         "reconciliation": reconciliation,
     }

@@ -99,7 +99,13 @@ app.include_router(api_router)
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    # El index nunca se cachea: es quien referencia app.js/style.css con su
+    # ?v=… de versión. Si el navegador sirviera un index viejo, cargaría el JS
+    # anterior y "los cambios no se ven" hasta un Ctrl+F5.
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 # Rutas de la SPA: cada sección tiene su URL propia (/pedidos, /impresiones…).

@@ -174,3 +174,16 @@ def test_basis_max_min_vs_promedio(Session):
     assert avg == pytest.approx(1.9, abs=0.05)
     assert mn == pytest.approx(1.4, abs=0.05)   # más barata (Ender)
     assert mn < avg < mx
+
+
+def test_extras_suman_a_la_estimacion(Session):
+    s = Session
+    pla = s.query(Material).filter_by(name="PLA").one()
+    files = [{"filename": "a", "weight_g": 100, "time_s": 3600, "quantity": 1, "material_id": pla.id}]
+    extras = [{"label": "Tornillos", "amount": 2.5, "quantity": 4}]
+    d = estimate_project(s, files, "usage", "avg", extras)
+    # gcode: 30 + 1.9 = 31.9 · extras 10 → total 41.9; extras suman igual a low/high
+    assert d["extras_total"] == pytest.approx(10.0, abs=0.01)
+    assert d["cost_total"] == pytest.approx(41.9, abs=0.05)
+    assert d["cost_high"] - d["cost_low"] == pytest.approx(2.0, abs=0.05)  # solo la flota abre rango
+    assert d["extras"][0]["line_cost"] == pytest.approx(10.0, abs=0.01)

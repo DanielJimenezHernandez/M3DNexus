@@ -302,7 +302,8 @@ def fleet_cost_per_hour(
 
 
 def estimate_project(
-    session: Session, files: list[dict], weighting: str = "usage", basis: str = "avg"
+    session: Session, files: list[dict], weighting: str = "usage", basis: str = "avg",
+    extras: list[dict] | None = None,
 ) -> dict:
     """Estima el coste de un proyecto (varios gcodes, posibles materiales varios).
 
@@ -366,11 +367,31 @@ def estimate_project(
             "no_price": missing or (material is not None and ppk <= 0),
         })
 
+    # Extras sin gcode (tornillería, pegamento…): coste fijo, el mismo en
+    # cualquier máquina, así que suma igual al total y a ambos extremos.
+    out_extras = []
+    extras_total = 0.0
+    for e in (extras or []):
+        qty = max(1, int(e.get("quantity") or 1))
+        amount = max(0.0, float(e.get("amount") or 0.0))
+        extras_total += amount * qty
+        out_extras.append({
+            "label": e.get("label") or "extra",
+            "amount": round(amount, 2),
+            "quantity": qty,
+            "line_cost": round(amount * qty, 2),
+        })
+    cost_total += extras_total
+    cost_low += extras_total
+    cost_high += extras_total
+
     return {
         "currency": currency,
         "weighting": weighting,
         "basis": basis,
         "files": out_files,
+        "extras": out_extras,
+        "extras_total": round(extras_total, 2),
         "cost_total": round(cost_total, 2),
         "cost_low": round(cost_low, 2),
         "cost_high": round(cost_high, 2),

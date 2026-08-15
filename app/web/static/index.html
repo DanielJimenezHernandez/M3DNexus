@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — gestión de impresión 3D</title>
-  <link rel="stylesheet" href="/style.css?v=82" />
+  <link rel="stylesheet" href="/style.css?v=94" />
 </head>
 <body>
   <!-- Panel lateral colapsable. Los botones conservan data-tab: es la clave que
@@ -64,6 +64,7 @@
         <span class="muted" id="jobs-count"></span>
       </div>
       <table id="jobs-table"></table>
+      <div id="jobs-cards" class="mobile-cards"></div>
       <div id="mat-picker" class="modal-ov" hidden></div>
       <div id="order-picker" class="modal-ov" hidden></div>
     </section>
@@ -95,6 +96,7 @@
         <span class="muted" id="mat-count"></span>
       </div>
       <table id="materials-table"></table>
+      <div id="materials-cards" class="mobile-cards"></div>
       <div id="material-form-host"></div>
       <div id="color-modal" class="modal-ov" hidden></div>
     </section>
@@ -188,6 +190,7 @@
             <option value="min">Mínimo de flota (competitivo)</option>
           </select></label>
         <button class="btn" id="est-add">Subir gcodes…</button>
+        <button class="btn ghost" id="est-add-extra" title="Parte extra sin gcode: tornillería, pegamento, piezas compradas…">🔧 + Extra</button>
         <input type="file" id="est-input" accept=".gcode,.gco,.g" multiple hidden />
       </div>
       <p class="muted">Un proyecto = uno o varios gcodes (pueden ser materiales distintos).
@@ -208,36 +211,65 @@
           <label class="field"><span>Margen de beneficio (%)</span><input type="number" step="1" id="est-margin" value="30" /></label>
         </div>
         <div id="est-sale"></div>
+        <div class="row-actions" style="margin-top:.8rem">
+          <button class="btn" id="est-to-quote" title="Genera el PDF de cotización con estos datos, itemizado (no toca la pestaña Cotización)">Imprimir PDF de cotización</button>
+        </div>
       </div>
     </section>
 
     <!-- Cotización: cabecera del documento + un ítem por impresión -->
     <section id="cotizacion" class="tab">
       <div class="toolbar">
-        <h2 style="margin:0">Cotización</h2>
+        <div class="seg" id="cotiz-mode">
+          <button data-cmode="quote" class="active">Cotización</button>
+          <button data-cmode="venta">Venta directa</button>
+        </div>
         <span class="spacer"></span>
-        <button class="btn" id="add-gcodes">Subir gcodes…</button>
-        <input type="file" id="bulk-gcode" accept=".gcode,.gco,.g" multiple hidden />
-        <button class="btn ghost small" id="add-item">+ Ítem vacío</button>
       </div>
-      <p class="muted">Cada ítem es una impresión: sube uno o varios gcodes —o elígelos
-        de la impresora— y se rellenan solos resolución, tiempo, masa y material.
-        Envío, IVA y margen se aplican una sola vez a toda la cotización.</p>
 
-      <div class="card" id="cotiz-header">
-        <div class="form-grid">
-          <label class="field"><span>Cliente (opcional)</span><input id="q-cliente"></label>
+      <!-- Modo Cotización (por gcode, con costes calculados) -->
+      <div id="quote-mode">
+        <div class="toolbar">
+          <button class="btn" id="add-gcodes">Subir gcodes…</button>
+          <input type="file" id="bulk-gcode" accept=".gcode,.gco,.g" multiple hidden />
+          <button class="btn ghost small" id="add-item">+ Ítem vacío</button>
+        </div>
+        <p class="muted">Cada ítem es una impresión: sube uno o varios gcodes —o elígelos
+          de la impresora— y se rellenan solos resolución, tiempo, masa y material.
+          Envío, IVA y margen se aplican una sola vez a toda la cotización.</p>
+
+        <div class="card" id="cotiz-header">
+          <div class="form-grid">
+            <label class="field"><span>Cliente (opcional)</span><input id="q-cliente"></label>
+          </div>
+        </div>
+
+        <div id="cotiz-items"></div>
+
+        <div class="card" id="cotiz-summary">
+          <div class="cotiz-results">
+            <div class="q-breakdown"></div>
+            <div class="q-sale"></div>
+          </div>
+          <div class="q-pie"></div>
         </div>
       </div>
 
-      <div id="cotiz-items"></div>
-
-      <div class="card" id="cotiz-summary">
-        <div class="cotiz-results">
-          <div class="q-breakdown"></div>
-          <div class="q-sale"></div>
+      <!-- Modo Venta directa: paquetes predeterminados de la tienda, precios
+           manuales con foto por ítem; mismo PDF de marca. -->
+      <div id="venta-mode" hidden>
+        <p class="muted">Paquetes ya definidos de tu tienda: cada ítem con su foto y
+          su precio de venta, más envío e IVA. Genera el mismo PDF de cotización.</p>
+        <div class="card">
+          <div class="form-grid">
+            <label class="field"><span>Cliente (opcional)</span><input id="v-cliente"></label>
+            <label class="field"><span>Servicio de envío</span><input type="number" step="0.01" min="0" id="v-envio" value="0"></label>
+            <label class="field"><span>IVA (%)</span><input type="number" step="1" min="0" id="v-iva" value="0"></label>
+          </div>
         </div>
-        <div class="q-pie"></div>
+        <div id="venta-items"></div>
+        <button class="btn ghost small" id="v-add-item">+ Añadir ítem</button>
+        <div class="card" id="venta-summary" style="margin-top:.8rem"></div>
       </div>
 
       <!-- Barra fija: solo el total. El desglose se queda arriba, en el flujo,
@@ -298,6 +330,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=82"></script>
+  <script src="/app.js?v=94"></script>
 </body>
 </html>

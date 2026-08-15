@@ -126,3 +126,16 @@ def test_jobout_incluye_has_thumbnail(env):
     by_id = {j["id"]: j for j in jobs}
     assert by_id[1]["has_thumbnail"] is True
     assert by_id[2]["has_thumbnail"] is False
+
+
+def test_review_endpoint(env):
+    # Califica con nota; luego la quita con rating 0.
+    r = env.post("/api/jobs/1/review", json={"rating": 4, "notes": "Primera capa perfecta,\nun poco de stringing."})
+    assert r.status_code == 200
+    assert r.json()["rating"] == 4
+    assert "stringing" in r.json()["review_notes"]
+    r2 = env.post("/api/jobs/1/review", json={"rating": 0, "notes": ""})
+    assert r2.json()["rating"] is None
+    assert r2.json()["review_notes"] is None
+    assert env.post("/api/jobs/1/review", json={"rating": 9}).status_code == 422
+    assert env.post("/api/jobs/99999/review", json={"rating": 3}).status_code == 404

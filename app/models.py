@@ -205,6 +205,11 @@ class PrintJob(Base):
     # True si faltan datos para un coste fiable (sin material, sin energía...).
     needs_review: Mapped[bool] = mapped_column(default=False)
 
+    # Calificación de calidad puesta a mano (1..5 estrellas; null = sin
+    # calificar) y nota libre: cómo quedó la pieza, si necesita ajustes.
+    rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    review_notes: Mapped[str | None] = mapped_column(String, nullable=True)
+
     raw_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Miniatura del gcode (PNG ~10 KB) guardada al ingerir, para verla en el
     # listado aunque la impresora esté apagada o se borre el gcode. Se difiere:
@@ -414,6 +419,9 @@ class Project(Base):
     # Peso medido del producto completo/ensamblado (báscula), para reconciliar
     # contra la suma de las partes (detecta soportes, merma o partes faltantes).
     total_weight_g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Gastos extra del producto (tornillería, pegamento, piezas compradas…):
+    # lista de {label, amount, quantity}. Suman al coste real.
+    extra_expenses: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     parts: Mapped[list["ProjectPart"]] = relationship(

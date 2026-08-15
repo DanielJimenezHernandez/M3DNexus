@@ -250,7 +250,8 @@ def estimate_project_endpoint(
 ):
     """Estima un proyecto multi-gcode con la flota (promedio/máx/mín, sin fijar máquina)."""
     files = [f.model_dump() for f in payload.files]
-    return estimate_project(db, files, payload.weighting, payload.basis)
+    extras = [e.model_dump() for e in payload.extras]
+    return estimate_project(db, files, payload.weighting, payload.basis, extras)
 
 
 # --------------------------------------------------------------------------- #
@@ -557,6 +558,28 @@ def assign_material(job_id: int, data: AssignMaterialIn, db: Session = Depends(g
     job.material_id = data.material_id
     job.material_manual = True   # elección del usuario: el sync no la pisa
     _recompute(db, job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@router.post("/jobs/{job_id}/review", response_model=JobOut)
+def review_job(job_id: int, payload: dict = Body(...), db: Session = Depends(get_session)):
+    """Califica la impresión (1..5 estrellas, 0/null la quita) con nota libre."""
+    job = db.get(PrintJob, job_id)
+    if not job:
+        raise HTTPException(404, "Job no encontrado")
+    rating = payload.get("rating")
+    if rating is not None:
+        try:
+            rating = int(rating)
+        except (TypeError, ValueError):
+            raise HTTPException(422, "rating debe ser un entero 0..5")
+        if not 0 <= rating <= 5:
+            raise HTTPException(422, "rating debe estar entre 0 y 5")
+    job.rating = rating or None          # 0 = quitar calificación
+    notes = (payload.get("notes") or "").strip()
+    job.review_notes = notes or None
     db.commit()
     db.refresh(job)
     return job
@@ -1046,6 +1069,7 @@ def _apply_project(project: Project, data: ProjectIn) -> None:
     project.name = data.name
     project.notes = data.notes
     project.total_weight_g = data.total_weight_g
+    project.extra_expenses = [e.model_dump() for e in data.extra_expenses] or None
     project.parts.clear()
     for pt in data.parts:
         project.parts.append(ProjectPart(**pt.model_dump()))

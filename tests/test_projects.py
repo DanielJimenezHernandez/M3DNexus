@@ -163,3 +163,16 @@ def test_delete_project_part(env):
     parts = env.get("/api/projects").json()[0]["parts"]
     assert len(parts) == 1 and parts[0]["weight_g"] == 20
     assert env.delete("/api/project-parts/99999").status_code == 404
+
+
+def test_gastos_extra_suman_al_proyecto(env):
+    body = {"name": "P", "parts": [
+        {"material_type": "PLA", "weight_g": 100, "quantity": 1}],
+        "extra_expenses": [
+            {"label": "Tornillos", "amount": 2.5, "quantity": 4},
+            {"label": "Pegamento", "amount": 15, "quantity": 1}]}
+    d = env.post("/api/projects", json=body).json()
+    assert d["extras_cost"] == pytest.approx(25.0, abs=0.01)   # 10 + 15
+    # material 0.1×400=40 + extras 25 (sin tiempo → máquina 0)
+    assert d["cost_total"] == pytest.approx(65.0, abs=0.01)
+    assert len(d["extra_expenses"]) == 2

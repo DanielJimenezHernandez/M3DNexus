@@ -139,3 +139,13 @@ def test_review_endpoint(env):
     assert r2.json()["review_notes"] is None
     assert env.post("/api/jobs/1/review", json={"rating": 9}).status_code == 422
     assert env.post("/api/jobs/99999/review", json={"rating": 3}).status_code == 404
+
+
+def test_purge_endpoint(env):
+    r = env.post("/api/jobs/1/purge", json={"purge_weight_g": 12.5})
+    assert r.status_code == 200
+    assert r.json()["purge_weight_g"] == 12.5
+    # quitar
+    assert env.post("/api/jobs/1/purge", json={"purge_weight_g": 0}).json()["purge_weight_g"] is None
+    assert env.post("/api/jobs/1/purge", json={"purge_weight_g": -5}).status_code == 422
+    assert env.post("/api/jobs/99999/purge", json={"purge_weight_g": 1}).status_code == 404

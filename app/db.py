@@ -66,6 +66,7 @@ def _migrate() -> None:
             "material_manual": "ALTER TABLE print_jobs ADD COLUMN material_manual BOOLEAN DEFAULT 0",
             "rating": "ALTER TABLE print_jobs ADD COLUMN rating INTEGER",
             "review_notes": "ALTER TABLE print_jobs ADD COLUMN review_notes VARCHAR",
+            "purge_weight_g": "ALTER TABLE print_jobs ADD COLUMN purge_weight_g FLOAT",
         },
         "orders": {
             "folder": "ALTER TABLE orders ADD COLUMN folder VARCHAR",
@@ -81,6 +82,7 @@ def _migrate() -> None:
         "project_parts": {
             "printer_id": "ALTER TABLE project_parts ADD COLUMN printer_id INTEGER",
             "gcode_filename": "ALTER TABLE project_parts ADD COLUMN gcode_filename VARCHAR",
+            "included": "ALTER TABLE project_parts ADD COLUMN included BOOLEAN DEFAULT 1",
         },
         "projects": {
             "extra_expenses": "ALTER TABLE projects ADD COLUMN extra_expenses JSON",

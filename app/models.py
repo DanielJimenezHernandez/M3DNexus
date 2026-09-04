@@ -173,6 +173,9 @@ class PrintJob(Base):
 
     filament_used_mm: Mapped[float] = mapped_column(Float, default=0.0)
     filament_weight_g: Mapped[float] = mapped_column(Float, default=0.0)
+    # Purga de cambio de color (g), medida a mano en impresiones multimaterial:
+    # el slicer NO la incluye en filament_weight_g. Se SUMA al cobrar filamento.
+    purge_weight_g: Mapped[float | None] = mapped_column(Float, nullable=True)
     material_id: Mapped[int | None] = mapped_column(
         ForeignKey("materials.id"), nullable=True
     )
@@ -447,6 +450,9 @@ class ProjectPart(Base):
     weight_g: Mapped[float] = mapped_column(Float, default=0.0)   # real, de báscula
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     print_time_s: Mapped[float] = mapped_column(Float, default=0.0)
+    # False = la parte se ve pero NO suma a la cuenta del proyecto (pruebas,
+    # iteraciones descartadas…).
+    included: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     project: Mapped["Project"] = relationship(back_populates="parts")

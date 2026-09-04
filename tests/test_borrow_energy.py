@@ -138,3 +138,20 @@ def test_job_cero_segundos_queda_resuelto(Session):
     assert rec.energy_kwh is None
     assert rec.energy_unavailable is True
     assert _is_settled(rec) is True
+
+
+def test_purga_se_suma_al_filamento_cobrado(Session):
+    # 20 g de slicer + 10 g de purga a 300/kg → 0.03 kg × 300 = 9.0 de filamento.
+    from app.services.ingest import apply_costs
+    s = Session
+    pla = s.query(Material).filter_by(name="PLA genérico").one()
+    ref = s.query(Printer).filter_by(name="Creality Hi").one()
+    rec = PrintJob(printer_id=ref.id, moonraker_job_id="pg", filament_weight_g=20,
+                   purge_weight_g=10, print_duration_s=0)
+    apply_costs(rec, ref, pla, price_per_kwh=4.0, currency="$")
+    assert rec.cost_filament == pytest.approx(9.0, abs=0.01)
+    # sin purga: 0.02 × 300 = 6.0
+    rec2 = PrintJob(printer_id=ref.id, moonraker_job_id="pg2", filament_weight_g=20,
+                    print_duration_s=0)
+    apply_costs(rec2, ref, pla, price_per_kwh=4.0, currency="$")
+    assert rec2.cost_filament == pytest.approx(6.0, abs=0.01)

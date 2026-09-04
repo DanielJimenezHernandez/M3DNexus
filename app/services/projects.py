@@ -51,9 +51,13 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
         material = (p.weight_g or 0.0) / 1000.0 * ppk
         machine = (p.print_time_s or 0.0) / 3600.0 * per_h
         unit = material + machine
-        mat_total += material * qty
-        mach_total += machine * qty
-        weight_total += (p.weight_g or 0.0) * qty
+        # Una parte excluida se lista con su coste, pero NO suma a la cuenta
+        # (ni al peso estimado que reconcilia contra la báscula).
+        included = p.included is not False
+        if included:
+            mat_total += material * qty
+            mach_total += machine * qty
+            weight_total += (p.weight_g or 0.0) * qty
         parts_out.append({
             "id": p.id,
             "name": p.name,
@@ -66,6 +70,7 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
             "print_time_s": p.print_time_s or 0.0,
             "price_per_kg": ppk,
             "no_price": ppk <= 0,
+            "included": included,
             "material": round(material, 2),
             "machine": round(machine, 2),
             "unit_cost": round(unit, 2),
@@ -73,11 +78,23 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
         })
 
     # Gastos extra (tornillería, pegamento, piezas compradas…): coste directo.
+    # Igual que las partes: los no incluidos se ven pero no suman.
     expenses = list(project.extra_expenses or [])
-    extras_cost = sum((e.get("amount") or 0) * (e.get("quantity") or 1) for e in expenses)
+    extras_cost = sum(
+        (e.get("amount") or 0) * (e.get("quantity") or 1)
+        for e in expenses if e.get("included", True)
+    )
 
     measured = project.total_weight_g
     have = measured and weight_total > 0
+
+    # Si hay peso de báscula, el MATERIAL se cobra por lo que el producto pesa
+    # de verdad, no por la suma estimada: se escala el coste calculado por el
+    # factor (báscula ÷ estimado), que reparte la diferencia (soportes, purga,
+    # merma) proporcionalmente respetando el precio de cada tipo de material.
+    material_estimated = mat_total
+    if have:
+        mat_total = mat_total * (measured / weight_total)
     reconciliation = {
         "sum_parts_g": round(weight_total, 1),
         "measured_g": measured,
@@ -105,7 +122,11 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
         "parts": parts_out,
         "extra_expenses": expenses,
         "extras_cost": round(extras_cost, 2),
+        # material_cost es el EFECTIVO (por báscula si la hay); el estimado por
+        # partes queda como referencia.
         "material_cost": round(mat_total, 2),
+        "material_cost_estimated": round(material_estimated, 2),
+        "material_by_scale": bool(have),
         "machine_cost": round(mach_total, 2),
         "cost_total": round(mat_total + mach_total + extras_cost, 2),
         "reconciliation": reconciliation,

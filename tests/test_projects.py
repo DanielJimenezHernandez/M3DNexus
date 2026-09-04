@@ -42,9 +42,9 @@ def test_precio_medio_por_tipo(env):
 
 
 def test_coste_material_mas_maquina(env):
-    # Parte: 100 g PLA, 2 h. Material = 0.1 × 400 = 40. Sin energía medida, la
-    # potencia cae al defecto 100 W → luz 0.4/h; máquina 1.0/h → flota 1.4/h.
-    # Máquina = 2 h × 1.4 = 2.8. Total = 42.8.
+    # Parte: 100 g PLA estimado, 2 h; báscula 110 g. El MATERIAL se cobra por
+    # báscula: 40 × (110/100) = 44. Máquina: potencia por defecto 100 W → luz
+    # 0.4/h + máquina 1.0/h = 1.4/h × 2 h = 2.8. Total = 46.8.
     body = {"name": "Trofeo", "total_weight_g": 110, "parts": [
         {"name": "Raqueta", "material_type": "PLA", "weight_g": 100,
          "quantity": 1, "print_time_s": 7200},
@@ -52,12 +52,22 @@ def test_coste_material_mas_maquina(env):
     r = env.post("/api/projects", json=body)
     assert r.status_code == 201
     d = r.json()
-    assert d["material_cost"] == pytest.approx(40.0, abs=0.01)
+    assert d["material_by_scale"] is True
+    assert d["material_cost"] == pytest.approx(44.0, abs=0.01)       # por báscula
+    assert d["material_cost_estimated"] == pytest.approx(40.0, abs=0.01)
     assert d["machine_cost"] == pytest.approx(2.8, abs=0.05)
-    assert d["cost_total"] == pytest.approx(42.8, abs=0.05)
+    assert d["cost_total"] == pytest.approx(46.8, abs=0.05)
     # reconciliación: partes 100 g vs producto 110 g → +10.
     assert d["reconciliation"]["sum_parts_g"] == 100.0
     assert d["reconciliation"]["diff_g"] == pytest.approx(10.0, abs=0.01)
+
+
+def test_sin_bascula_material_estimado(env):
+    # Sin peso medido: el material sigue siendo el estimado por partes.
+    d = env.post("/api/projects", json={"name": "P", "parts": [
+        {"material_type": "PLA", "weight_g": 100, "quantity": 1}]}).json()
+    assert d["material_by_scale"] is False
+    assert d["material_cost"] == pytest.approx(40.0, abs=0.01)
 
 
 def test_cantidad_multiplica(env):
@@ -176,3 +186,48 @@ def test_gastos_extra_suman_al_proyecto(env):
     # material 0.1×400=40 + extras 25 (sin tiempo → máquina 0)
     assert d["cost_total"] == pytest.approx(65.0, abs=0.01)
     assert len(d["extra_expenses"]) == 2
+
+
+def test_update_part_quantity(env):
+    pid = env.post("/api/projects", json={"name": "P", "parts": [
+        {"material_type": "PLA", "weight_g": 100, "quantity": 1, "print_time_s": 0}]}).json()["id"]
+    part = env.get("/api/projects").json()[0]["parts"][0]
+    assert env.post(f"/api/project-parts/{part['id']}", json={"quantity": 3}).status_code == 200
+    d = env.get("/api/projects").json()[0]
+    p = d["parts"][0]
+    assert p["quantity"] == 3
+    assert p["line_cost"] == pytest.approx(p["unit_cost"] * 3, abs=0.01)   # ×3 exacto
+    assert env.post(f"/api/project-parts/{part['id']}", json={"quantity": 0}).status_code == 422
+    assert env.post("/api/project-parts/99999", json={"quantity": 2}).status_code == 404
+
+
+def test_incluir_en_la_cuenta(env):
+    # Parte excluida y extra excluido: se listan pero no suman al total.
+    body = {"name": "P", "parts": [
+        {"material_type": "PLA", "weight_g": 100, "quantity": 1, "print_time_s": 0},
+        {"material_type": "PLA", "weight_g": 50, "quantity": 1, "print_time_s": 0,
+         "included": False},
+    ], "extra_expenses": [
+        {"label": "Argollas", "amount": 10, "quantity": 1},
+        {"label": "Prueba descartada", "amount": 99, "quantity": 1, "included": False},
+    ]}
+    d = env.post("/api/projects", json=body).json()
+    # material: solo la parte incluida (0.1 × 400 = 40); extras: solo 10.
+    assert d["material_cost"] == pytest.approx(40.0, abs=0.01)
+    assert d["extras_cost"] == pytest.approx(10.0, abs=0.01)
+    assert d["cost_total"] == pytest.approx(50.0, abs=0.01)
+    assert d["parts"][1]["included"] is False
+    assert d["parts"][1]["line_cost"] > 0          # se muestra su coste igualmente
+    assert d["reconciliation"]["sum_parts_g"] == 100.0   # la excluida no pesa
+    # toggle por endpoint: incluir la parte excluida
+    pid = d["id"]; part_id = d["parts"][1]["id"]
+    assert env.post(f"/api/project-parts/{part_id}", json={"included": True}).status_code == 200
+    d2 = env.get("/api/projects").json()[0]
+    assert d2["material_cost"] == pytest.approx(60.0, abs=0.01)   # 40 + 20
+    # toggle del extra caro
+    assert env.post(f"/api/projects/{pid}/extra-included",
+                    json={"index": 1, "included": True}).status_code == 200
+    d3 = env.get("/api/projects").json()[0]
+    assert d3["extras_cost"] == pytest.approx(109.0, abs=0.01)
+    assert env.post(f"/api/projects/{pid}/extra-included",
+                    json={"index": 9, "included": True}).status_code == 404

@@ -66,7 +66,11 @@ from ..services.estimate import (
     estimate_project,
 )
 from ..services.calibration import rescan_from_history
-from ..services.filament import get_or_create_by_parsed, parse_all_filaments
+from ..services.filament import (
+    get_or_create_by_parsed,
+    parse_all_filaments,
+    parse_filament,
+)
 from ..services.ingest import _borrow_energy, apply_costs, get_settings
 from ..services.loaded import resolve_slots, set_slots
 from ..services.orca_import import apply_import, plan_import
@@ -472,6 +476,44 @@ def list_jobs(
     stmt = stmt.limit(limit).offset(offset)
     jobs = db.scalars(stmt).all()
 
+    # Multicolor REAL: varios filamentos con peso extruido > 0 según los pesos
+    # por herramienta del slicer. Si el gcode no los trae, se cae a "lista más
+    # de un filamento" (menos preciso: un perfil multi con un solo color usado
+    # también marcaría). Importa para el flujo de purgas: el slicer no las suma.
+    def _is_multicolor(meta: dict | None) -> bool:
+        if not meta:
+            return False
+        fw = meta.get("filament_weights")
+        if isinstance(fw, list) and fw:
+            return sum(1 for w in fw if (w or 0) > 0.05) >= 2
+        return str(meta.get("filament_name") or "").count(";") >= 1
+
+    def _used_filaments(meta: dict) -> list[dict]:
+        """Filamentos realmente usados, con su peso por herramienta si viene.
+
+        Se alinea nombre↔peso por índice ANTES de parsear (parse_all_filaments
+        deduplica y desalinearía); con pesos, se filtran las herramientas a 0.
+        """
+        names = [n.strip().strip('"').strip()
+                 for n in str(meta.get("filament_name") or "").split(";")]
+        fw = meta.get("filament_weights")
+        fw = fw if isinstance(fw, list) else None
+        out = []
+        for i, nm in enumerate(names):
+            if not nm:
+                continue
+            w = fw[i] if fw and i < len(fw) else None
+            if fw is not None and (w or 0) <= 0.05:
+                continue   # herramienta cargada pero sin extruir
+            p = parse_filament(nm, None)
+            out.append({"name": p.full_name if p else nm,
+                        "weight_g": round(w, 1) if w else None})
+        return out
+
+    for j in jobs:
+        j.is_multicolor = _is_multicolor(j.raw_metadata)
+        j.used_filaments = _used_filaments(j.raw_metadata) if j.is_multicolor else []
+
     # Relación por gcode: pedidos y proyectos que usan cada archivo (deduplicado
     # por pedido/proyecto). Se adjunta a cada job como 'in_use' para el badge.
     refs: dict[str, dict] = {}
@@ -557,6 +599,28 @@ def assign_material(job_id: int, data: AssignMaterialIn, db: Session = Depends(g
         raise HTTPException(404, "Material no encontrado")
     job.material_id = data.material_id
     job.material_manual = True   # elección del usuario: el sync no la pisa
+    _recompute(db, job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@router.post("/jobs/{job_id}/purge", response_model=JobOut)
+def set_job_purge(job_id: int, payload: dict = Body(...), db: Session = Depends(get_session)):
+    """Fija la purga medida (g) de una impresión multimaterial y recalcula.
+
+    El filamento cobrado pasa a ser peso del slicer + purga.
+    """
+    job = db.get(PrintJob, job_id)
+    if not job:
+        raise HTTPException(404, "Job no encontrado")
+    try:
+        purge = float(payload.get("purge_weight_g") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "purge_weight_g debe ser un número")
+    if purge < 0:
+        raise HTTPException(422, "purge_weight_g no puede ser negativo")
+    job.purge_weight_g = purge or None
     _recompute(db, job)
     db.commit()
     db.refresh(job)
@@ -674,7 +738,11 @@ def job_gcode_filaments(job_id: int, db: Session = Depends(get_session)):
             "material_id": existing.id if existing else None,
             "assigned": existing is not None and existing.id == job.material_id,
         })
-    return {"filaments": out, "current_material_id": job.material_id}
+    return {
+        "filaments": out,
+        "current_material_id": job.material_id,
+        "material_manual": bool(job.material_manual),
+    }
 
 
 @router.post("/jobs/{job_id}/set-filament", response_model=JobOut)
@@ -1118,7 +1186,8 @@ def add_job_to_project(
         printer_id=job.printer_id,
         gcode_filename=job.filename,
         material_type=(mat.material_type if mat else "PLA"),
-        weight_g=job.filament_weight_g or 0.0,     # estimado del slicer
+        # Peso total de la pieza: estimado del slicer + purga medida (si la hay).
+        weight_g=(job.filament_weight_g or 0.0) + (job.purge_weight_g or 0.0),
         print_time_s=job.print_duration_s or 0.0,  # tiempo real
         quantity=1,
     ))
@@ -1135,6 +1204,47 @@ def update_project(project_id: int, data: ProjectIn, db: Session = Depends(get_s
     db.commit()
     db.refresh(project)
     return resolve_project(db, project)
+
+
+@router.post("/project-parts/{part_id}", status_code=200)
+def update_project_part(part_id: int, payload: dict = Body(...), db: Session = Depends(get_session)):
+    """Cambia cantidad y/o inclusión de una parte sin abrir el editor."""
+    part = db.get(ProjectPart, part_id)
+    if not part:
+        raise HTTPException(404, "Parte no encontrada")
+    if "quantity" in payload:
+        try:
+            qty = int(payload.get("quantity"))
+        except (TypeError, ValueError):
+            raise HTTPException(422, "quantity debe ser un entero")
+        if qty < 1:
+            raise HTTPException(422, "quantity debe ser al menos 1")
+        part.quantity = qty
+    if "included" in payload:
+        part.included = bool(payload.get("included"))
+    db.commit()
+    return {"ok": True, "quantity": part.quantity, "included": part.included}
+
+
+@router.post("/projects/{project_id}/extra-included", status_code=200)
+def toggle_project_extra(
+    project_id: int, payload: dict = Body(...), db: Session = Depends(get_session)
+):
+    """Marca/desmarca un gasto extra (por índice) para la cuenta del proyecto."""
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Proyecto no encontrado")
+    expenses = list(project.extra_expenses or [])
+    try:
+        idx = int(payload.get("index"))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "index debe ser un entero")
+    if not 0 <= idx < len(expenses):
+        raise HTTPException(404, "Gasto no encontrado")
+    expenses[idx] = {**expenses[idx], "included": bool(payload.get("included"))}
+    project.extra_expenses = expenses   # lista nueva: SQLAlchemy detecta el cambio
+    db.commit()
+    return {"ok": True, "index": idx, "included": expenses[idx]["included"]}
 
 
 @router.delete("/project-parts/{part_id}", status_code=204)

@@ -201,7 +201,10 @@ def apply_costs(
         CostInputs(
             energy_kwh=record.energy_kwh or 0.0,
             electricity_price_per_kwh=price_per_kwh,
-            filament_weight_g=record.filament_weight_g or 0.0,
+            # La purga de cambio de color (multimaterial) es filamento gastado
+            # que el slicer no cuenta: se suma al peso cobrado.
+            filament_weight_g=(record.filament_weight_g or 0.0)
+            + (record.purge_weight_g or 0.0),
             filament_price_per_kg=filament_price,
             print_duration_hours=duration_h,
             machine_purchase_price=printer.purchase_price or 0.0,

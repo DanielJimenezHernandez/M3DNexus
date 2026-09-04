@@ -118,6 +118,12 @@ class JobOut(BaseModel):
     has_thumbnail: bool
     rating: int | None
     review_notes: str | None
+    purge_weight_g: float | None
+    # True si la impresión usó de verdad varios filamentos (o el gcode lista
+    # varios y no hay pesos por herramienta para afinar).
+    is_multicolor: bool = False
+    # En multimaterial: los filamentos realmente usados [{name, weight_g}].
+    used_filaments: list[dict] = []
     # Pedidos/proyectos que usan este gcode: [{kind, id, label}].
     in_use: list[dict] = []
 
@@ -162,6 +168,9 @@ class ExpenseIn(BaseModel):
     label: str
     amount: float = 0.0      # precio por unidad
     quantity: int = 1
+    # Solo lo usan los proyectos: False = el gasto se ve pero no suma a la
+    # cuenta. En pedidos/estimación siempre viaja True y no afecta.
+    included: bool = True
 
     @field_validator("amount")
     @classmethod
@@ -219,6 +228,7 @@ class ProjectPartIn(BaseModel):
     weight_g: float = 0.0
     quantity: int = 1
     print_time_s: float = 0.0
+    included: bool = True   # False = se ve pero no suma a la cuenta
 
     @field_validator("quantity")
     @classmethod

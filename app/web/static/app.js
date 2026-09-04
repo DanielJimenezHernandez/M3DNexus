@@ -361,8 +361,12 @@ function jobDetailHTML(j, pmap, mById) {
         ${drow("Inicio", fmtDate(j.start_time))}
         ${drow("Fin", fmtDate(j.end_time))}
         ${drow("Duración", fmtDur(j.print_duration_s))}
-        ${drow("Filamento", `${j.filament_weight_g.toFixed(1)} g (${(j.filament_used_mm / 1000).toFixed(1)} m)`)}
-        ${drow("Material", mat ? `${escHtml(mat.name)} · ${money(mat.price_per_kg)}/kg` : "—")}
+        ${drow("Filamento", `${j.filament_weight_g.toFixed(1)} g (${(j.filament_used_mm / 1000).toFixed(1)} m)${j.purge_weight_g ? ` <b>+ ${j.purge_weight_g} g purga = ${(j.filament_weight_g + j.purge_weight_g).toFixed(1)} g</b>` : ""}`)}
+        ${j.is_multicolor ? drow("Purga (g)", `<span class="purge-wrap"><input type="number" step="0.1" min="0" class="purge-input" data-job="${j.id}" value="${j.purge_weight_g ?? ""}" placeholder="0">
+          <span class="muted">cambio de color medido a mano — se suma al filamento cobrado</span></span>`) : ""}
+        ${drow("Material", j.is_multicolor
+          ? '<span class="pill multicolor">multimaterial — el peso del slicer no incluye purgas</span> <span class="muted">(selectores abajo)</span>'
+          : `<select class="mat-select" data-job="${j.id}">${estMatOptions(j.material_id)}</select>`)}
         ${drow("Energía", energia)}
         ${drow("Tarifa luz", `${money(j.tariff_per_kwh)}/kWh`)}
         ${drow("Coste luz", money(j.cost_energy))}
@@ -372,6 +376,11 @@ function jobDetailHTML(j, pmap, mById) {
         ${drow("Coste TOTAL", `<strong>${money(j.cost_total)}</strong>`)}
         ${drow("En", badges)}
       </dl>
+      ${j.is_multicolor ? `<div class="gfil-panel" data-job="${j.id}">
+        <div class="review-head"><strong>Materiales usados</strong>
+          <span class="muted">— un selector por filamento, precargado con el detectado; marca cuál se cobra</span></div>
+        <div class="gfil-list muted">cargando…</div>
+      </div>` : ""}
       <div class="job-review" data-job="${j.id}" data-rating="${j.rating || 0}">
         <div class="review-head"><strong>Calidad de la impresión</strong>
           <span class="muted">— ¿quedó como esperabas o necesita ajuste?</span></div>
@@ -408,7 +417,7 @@ function renderJobsTable(rows, pmap, mById) {
           const short = escHtml((j.filename || "—").split("/").pop());
           const pr = printers.find((p) => p.id === j.printer_id);
           const url = pr && j.filename ? klipperJobsUrl(pr) : null;
-          const rate = j.rating ? ` <span class="rate-ind" title="Calificación">★${j.rating}</span>` : "";
+          const rate = j.rating ? ` <span class="rate-ind" title="Calificación: ${j.rating} de 5">${"★".repeat(j.rating)}</span>` : "";
           const nameEl = url
             ? `<span class="job-name gcode-open" data-open-url="${escHtml(url)}" data-gcode-name="${escHtml((j.filename || "").split("/").pop())}" title="Abrir en ${escHtml(pr.name)} y copiar el nombre">${short} ↗</span>`
             : `<span class="job-name" title="${escHtml(j.filename || "")}">${short}</span>`;
@@ -434,10 +443,20 @@ function renderJobsTable(rows, pmap, mById) {
         <td><span class="pill ${j.status}">${j.status}</span>${review}</td>
         <td class="muted">${fmtDate(j.end_time)}</td>
         <td class="num">${fmtDur(j.print_duration_s)}</td>
-        <td class="num">${j.filament_weight_g.toFixed(0)} g</td>
+        <td class="num"${j.purge_weight_g ? ` title="${j.filament_weight_g.toFixed(0)} g del slicer + ${j.purge_weight_g} g de purga"` : ""}>${j.purge_weight_g ? `${(j.filament_weight_g + j.purge_weight_g).toFixed(0)} g <span class="muted">(+${j.purge_weight_g}p)</span>` : `${j.filament_weight_g.toFixed(0)} g`}</td>
         <td class="num"${j.energy_estimated ? ' title="Energía estimada con la potencia media de otra impresora (no medida)"' : ""}>${j.energy_kwh != null ? (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh" : "—"}</td>
-        <td><div class="mat-cell">${jobMatButton(j, mById)}
-          <button class="btn ghost small" data-gcode-fil="${j.id}" title="Filamentos del gcode (elegir cuál se usó / crear)">🧵</button></div></td>
+        ${(() => {
+          // Solo lectura: el cambio de material vive en el detalle expandido.
+          const mat = j.material_id != null ? mById[j.material_id] : null;
+          if (!j.is_multicolor) {
+            const sw = mat && mat.color_hex ? `<span class="swatch" style="background:${escHtml(mat.color_hex)}"></span>` : "";
+            return `<td><span class="mat-name">${sw}${mat ? escHtml(mat.name) : '<span class="muted">— sin material —</span>'}</span></td>`;
+          }
+          const lista = (j.used_filaments || []).map((f) =>
+            `<div class="mat-multi-row" title="${escHtml(f.name)}">${escHtml(f.name)}${f.weight_g ? ` · ${f.weight_g} g` : ""}</div>`).join("");
+          return `<td><div class="mat-multi">${lista}</div>
+            <span class="pill multicolor" title="Impresión multimaterial: el peso del slicer NO incluye las purgas de cambio">multimaterial</span></td>`;
+        })()}
         <td class="row-actions">
           <button class="btn ghost small" data-recompute="${j.id}">↻</button>
           <button class="btn danger small" data-del-job="${j.id}">✕</button>
@@ -469,16 +488,18 @@ function renderJobsTable(rows, pmap, mById) {
       ? `<div class="use-badges">${j.in_use.map((u) => `<span class="use-badge ${u.kind}" data-use-kind="${u.kind}">${escHtml(u.label)}</span>`).join("")}</div>` : "";
     return `<div class="job-card" data-job-card="${j.id}">
       <div class="jc-top">${thumb}
-        <div class="jc-title">${name}${j.rating ? ` <span class="rate-ind">★${j.rating}</span>` : ""}${badges}</div>
+        <div class="jc-title">${name}${j.rating ? ` <span class="rate-ind" title="Calificación: ${j.rating} de 5">${"★".repeat(j.rating)}</span>` : ""}${badges}</div>
         ${cost}
       </div>
       <div class="jc-meta muted">
         ${escHtml(pmap[j.printer_id] || "")} · <span class="pill ${j.status}">${j.status}</span>${j.needs_review ? ` <span class="pill review">revisar</span>` : ""}<br>
         ${fmtDate(j.end_time)} · ${fmtDur(j.print_duration_s)} · ${j.filament_weight_g.toFixed(0)} g · ${j.energy_kwh != null ? (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh" : "— kWh"}
       </div>
+      ${j.is_multicolor
+        ? `<div class="mat-multi">${(j.used_filaments || []).map((f) => `<div class="mat-multi-row">${escHtml(f.name)}${f.weight_g ? ` · ${f.weight_g} g` : ""}</div>`).join("")}</div>
+           <span class="pill multicolor" title="Multimaterial: el peso del slicer no incluye purgas">multimaterial</span>`
+        : `<div class="muted" style="font-size:.78rem">${(() => { const m = j.material_id != null ? mById[j.material_id] : null; return m ? escHtml(m.name) : "— sin material —"; })()}</div>`}
       <div class="jc-actions">
-        <div class="mat-cell">${jobMatButton(j, mById)}
-          <button class="btn ghost small" data-gcode-fil="${j.id}">🧵</button></div>
         <span class="spacer"></span>
         <button class="btn ghost small" data-add-order="${j.id}">Agregar a:</button>
         <button class="btn ghost small" data-recompute="${j.id}">↻</button>
@@ -532,6 +553,100 @@ function renderJobsTable(rows, pmap, mById) {
     if (!j) return;
     container.innerHTML = jobDetailHTML(j, pmap, mById);
     wireReview(container);
+    wireMonoSelect(container);
+    wirePurge(container);
+    fillGcodeFilPanel(container, j);
+  };
+
+  // Mono-material: el selector de la fila Material asigna directamente.
+  const wireMonoSelect = (container) => {
+    const sel = container.querySelector(".mat-select");
+    if (!sel) return;
+    sel.addEventListener("change", async () => {
+      await api.send(`/api/jobs/${sel.dataset.job}/assign-material`, "POST",
+        { material_id: sel.value ? +sel.value : null });
+      toast("Material asignado"); loadJobs();   // el detalle abierto se conserva
+    });
+  };
+
+  // Purga (multimaterial): guardar al cambiar recalcula el coste del job.
+  const wirePurge = (container) => {
+    const inp = container.querySelector(".purge-input");
+    if (!inp) return;
+    inp.addEventListener("change", async () => {
+      const v = Math.max(0, parseFloat(inp.value) || 0);
+      try {
+        await api.send(`/api/jobs/${inp.dataset.job}/purge`, "POST", { purge_weight_g: v });
+        toast(v ? `Purga guardada: ${v} g (coste recalculado)` : "Purga quitada");
+        loadJobs();
+      } catch (e) { toast("Error: " + e.message); }
+    });
+  };
+
+  // Multimaterial: un selector por filamento del gcode, precargado con el
+  // material detectado, y un radio para marcar cuál se cobra. Corrige parseos
+  // fallidos sin salir del renglón; si el elegido no existe aún, se crea.
+  const fillGcodeFilPanel = async (container, j) => {
+    const panel = container.querySelector(".gfil-panel");
+    if (!panel) return;
+    let d;
+    try { d = await api.get(`/api/jobs/${j.id}/filaments`); }
+    catch (e) { panel.querySelector(".gfil-list").textContent = "No se pudieron leer los filamentos."; return; }
+    const pesos = Object.fromEntries((j.used_filaments || []).map((f) => [f.name.toLowerCase(), f.weight_g]));
+    // Precio de cada filamento (para verlo de un vistazo y sugerir el más caro).
+    const precioDe = (f) => {
+      const m = f.material_id ? materials.find((x) => x.id === f.material_id) : null;
+      return m && m.price_per_kg > 0 ? m.price_per_kg : null;
+    };
+    let maxIdx = -1, maxPrecio = 0;
+    d.filaments.forEach((f, i) => {
+      const p = precioDe(f);
+      if (p != null && p > maxPrecio) { maxPrecio = p; maxIdx = i; }
+    });
+    const list = panel.querySelector(".gfil-list");
+    list.classList.remove("muted");
+    list.innerHTML = d.filaments.map((f, i) => {
+      const w = pesos[f.name.toLowerCase()];
+      const p = precioDe(f);
+      return `<div class="gfil-row" data-fname="${escHtml(f.name)}">
+        <span class="gfil-name" title="${escHtml(f.name)}">${escHtml(f.name)}</span>
+        <span class="gfil-price">${p != null ? money(p) + "/kg" : "—"}</span>
+        ${i === maxIdx ? '<span class="pill gfil-max" title="El filamento más caro de esta impresión">más caro</span>' : ""}
+        <span class="muted">${w ? `${w} g` : ""}</span>
+        <select class="gfil-sel">${estMatOptions(f.material_id)}</select>
+        <label class="gfil-cobra" title="Este filamento es el que se cobra en el coste">
+          <input type="radio" name="gfil-cobra-${j.id}" ${f.assigned ? "checked" : ""}> se cobra</label>
+      </div>`;
+    }).join("") || `<span class="muted">El gcode no lista filamentos con nombre.</span>`;
+
+    const apply = async (row) => {
+      const sel = row.querySelector(".gfil-sel");
+      if (sel.value) {
+        await api.send(`/api/jobs/${j.id}/assign-material`, "POST", { material_id: +sel.value });
+      } else {
+        // Sin material en biblioteca: se crea desde el nombre del gcode.
+        await api.send(`/api/jobs/${j.id}/set-filament`, "POST", { name: row.dataset.fname });
+      }
+      toast("Material asignado"); loadJobs();
+    };
+    panel.querySelectorAll(".gfil-row").forEach((row) => {
+      const radio = row.querySelector("input[type=radio]");
+      radio.addEventListener("change", () => { if (radio.checked) apply(row); });
+      row.querySelector(".gfil-sel").addEventListener("change", () => {
+        if (radio.checked) apply(row);   // cambiar el select del cobrado reasigna
+      });
+    });
+
+    // Preselección: si la asignación NO fue manual y el filamento más caro no
+    // es el que se está cobrando, se cobra el más caro (protege el precio).
+    // Una elección manual tuya nunca se pisa.
+    if (maxIdx >= 0 && !d.material_manual
+        && d.filaments[maxIdx].material_id !== d.current_material_id) {
+      const row = panel.querySelectorAll(".gfil-row")[maxIdx];
+      row.querySelector("input[type=radio]").checked = true;
+      await apply(row);
+      toast(`Se cobra el filamento más caro: ${d.filaments[maxIdx].name}`);
+    }
   };
   const wireReview = (scope) => {
     const box = scope.querySelector(".job-review");
@@ -556,8 +671,14 @@ function renderJobsTable(rows, pmap, mById) {
       } catch (e) { toast("Error: " + e.message); }
     });
   };
-  // Filas ya abiertas (vienen renderizadas): cablear su calificación.
-  document.querySelectorAll("#jobs-table tr.job-detail-tr:not([hidden])").forEach(wireReview);
+  // Filas ya abiertas (vienen renderizadas): cablear calificación y materiales.
+  document.querySelectorAll("#jobs-table tr.job-detail-tr:not([hidden])").forEach((tr) => {
+    wireReview(tr);
+    wireMonoSelect(tr);
+    wirePurge(tr);
+    const j = allJobs.find((x) => x.id === +tr.dataset.detail);
+    if (j) fillGcodeFilPanel(tr, j);
+  });
   // Clic en cualquier parte del renglón (menos controles) despliega el detalle.
   document.querySelectorAll("#jobs-table tr[data-job-row]").forEach((row) =>
     row.addEventListener("click", (e) => {
@@ -2282,6 +2403,9 @@ function expenseEditor(host, expenses) {
       <input class="exp-amount" type="number" step="0.01" min="0" placeholder="c/u" title="Precio por unidad" value="${e.amount ?? ""}">
       <button type="button" class="btn ghost small exp-del">✕</button>
     </div>`);
+    // Conserva la marca "en la cuenta" de proyectos al re-guardar (el toggle
+    // vive en la tarjeta del proyecto; en pedidos siempre queda en true).
+    row.dataset.included = e.included === false ? "0" : "1";
     row.querySelector(".exp-del").onclick = () => row.remove();
     host.insertBefore(row, add);   // siempre por encima del botón
   };
@@ -2299,6 +2423,7 @@ function readExpenses(host) {
       label: r.querySelector(".exp-label").value.trim(),
       amount: parseFloat(r.querySelector(".exp-amount").value) || 0,
       quantity: Math.max(1, parseInt(r.querySelector(".exp-qty").value) || 1),
+      included: r.dataset.included !== "0",
     }))
     .filter((e) => e.label || e.amount);
 }
@@ -2551,6 +2676,8 @@ setInterval(() => {
 let projMode = "orders";
 let projects = [];
 let projPrices = {};   // {TIPO: precio medio/kg}
+// Partes de proyecto desplegadas: sobreviven al re-render del tablero.
+const openParts = new Set();
 
 function setPedMode(mode) {
   projMode = mode;
@@ -2590,15 +2717,20 @@ function renderProjectsBoard() {
       ? `<img class="entity-thumb" src="${pr.photo_url}" onclick="window.open('${pr.photo_url}','_blank')" alt="" title="Foto del producto">` : "";
     const parts = pr.parts.map((p) => projPartRow(p)).join("")
       // Gastos extra como filas propias, con 🔧 en lugar de miniatura.
-      + (pr.extra_expenses || []).map((e) => `<div class="order-item-wrap">
+      + (pr.extra_expenses || []).map((e, ei) => {
+        const inc = e.included !== false;
+        return `<div class="order-item-wrap ${inc ? "" : "excluded"}">
           <div class="order-item">
+            <input type="checkbox" class="incl-check" data-incl-extra="${ei}" data-project="${pr.id}" ${inc ? "checked" : ""}
+              title="${inc ? "En la cuenta: suma al coste del proyecto" : "Fuera de la cuenta: no suma al coste"}">
             <div class="oi-thumb tool">🔧</div>
             <span class="oi-names"><span class="oi-name">${escHtml(e.label || "extra")}</span></span>
             <span class="muted">extra${(e.quantity || 1) > 1 ? " · ×" + e.quantity : ""}</span>
             <span class="spacer"></span>
             <span class="oi-cost cost-val ok">${money2((e.amount || 0) * (e.quantity || 1), currency)}</span>
           </div>
-        </div>`).join("");
+        </div>`;
+      }).join("");
     return `<div class="card order-card">
       <div class="order-head">${photo}<strong>${escHtml(pr.name)}</strong>
         <span class="spacer"></span>
@@ -2608,7 +2740,7 @@ function renderProjectsBoard() {
         <button class="btn ghost small" data-est-proj="${pr.id}" title="Cargar sus gcodes en la pestaña Estimación (promedio de flota)">→ Estimación</button></div>
       ${pr.notes ? `<p class="muted" style="margin:.2rem 0">${escHtml(pr.notes)}</p>` : ""}
       <div class="order-items">${parts || '<span class="muted">Sin partes</span>'}</div>
-      <div class="muted pj-foot">material ${money2(pr.material_cost, currency)} · máquina ${money2(pr.machine_cost, currency)}${pr.extras_cost ? ` · extras ${money2(pr.extras_cost, currency)}` : ""} · ${recTxt}</div>
+      <div class="muted pj-foot">material ${money2(pr.material_cost, currency)}${pr.material_by_scale ? ` <span title="Cobrado por el peso de báscula (estimado por partes: ${money2(pr.material_cost_estimated, currency)})">(por báscula)</span>` : ""} · máquina ${money2(pr.machine_cost, currency)}${pr.extras_cost ? ` · extras ${money2(pr.extras_cost, currency)}` : ""} · ${recTxt}</div>
     </div>`;
   }).join("");
   host.querySelectorAll("[data-edit-proj]").forEach((b) =>
@@ -2620,11 +2752,45 @@ function renderProjectsBoard() {
     }));
   host.querySelectorAll("[data-est-proj]").forEach((b) =>
     b.addEventListener("click", () => loadProjectIntoEstimacion(projects.find((p) => p.id == b.dataset.estProj))));
-  // Parte desplegable (mismo mecanismo que las piezas de pedido).
+  // Parte desplegable (mismo mecanismo que las piezas de pedido). Se recuerda
+  // qué partes están abiertas para reabrirlas tras un refresco del tablero.
+  host.querySelectorAll(".order-item-wrap[data-part-id]").forEach((w) => {
+    if (openParts.has(+w.dataset.partId)) w.classList.add("open");
+  });
   host.querySelectorAll(".order-item[data-expand-part]").forEach((row) =>
     row.addEventListener("click", (e) => {
-      if (e.target.closest("button, a, .gcode-nav")) return;
-      row.closest(".order-item-wrap").classList.toggle("open");
+      if (e.target.closest("button, a, input, select, .gcode-nav")) return;
+      const wrap = row.closest(".order-item-wrap");
+      const id = +wrap.dataset.partId;
+      if (wrap.classList.toggle("open")) openParts.add(id); else openParts.delete(id);
+    }));
+  // Cantidad editable en el detalle: guarda y recalcula el proyecto entero.
+  host.querySelectorAll(".ppart-qty").forEach((inp) =>
+    inp.addEventListener("change", async () => {
+      const qty = Math.max(1, parseInt(inp.value) || 1);
+      try {
+        await api.send(`/api/project-parts/${inp.dataset.part}`, "POST", { quantity: qty });
+        toast(`Cantidad: ${qty}`); loadProjects();
+      } catch (e) { toast("Error: " + e.message); }
+    }));
+  // Checkbox "en la cuenta": lo desmarcado se ve pero no suma al coste.
+  host.querySelectorAll("[data-incl-part]").forEach((chk) =>
+    chk.addEventListener("change", async () => {
+      try {
+        await api.send(`/api/project-parts/${chk.dataset.inclPart}`, "POST",
+          { included: chk.checked });
+        toast(chk.checked ? "Añadida a la cuenta" : "Fuera de la cuenta");
+        loadProjects();
+      } catch (e) { toast("Error: " + e.message); }
+    }));
+  host.querySelectorAll("[data-incl-extra]").forEach((chk) =>
+    chk.addEventListener("change", async () => {
+      try {
+        await api.send(`/api/projects/${chk.dataset.project}/extra-included`, "POST",
+          { index: +chk.dataset.inclExtra, included: chk.checked });
+        toast(chk.checked ? "Añadido a la cuenta" : "Fuera de la cuenta");
+        loadProjects();
+      } catch (e) { toast("Error: " + e.message); }
     }));
   host.querySelectorAll("[data-fix-type]").forEach((b) =>
     b.addEventListener("click", (e) => {
@@ -2668,11 +2834,13 @@ function projPartRow(p) {
     ${drow("Precio /kg", p.price_per_kg ? money2(p.price_per_kg, currency) : null)}
     ${drow("Coste material", money2(p.material, currency))}
     ${drow("Coste máquina", money2(p.machine, currency))}
-    ${drow("Cantidad", p.quantity)}
+    ${drow("Cantidad", `<input type="number" min="1" class="ppart-qty" data-part="${p.id}" value="${p.quantity}" title="Cuántas veces se imprime este gcode en el proyecto"> <span class="muted">× ${money2(p.unit_cost, currency)} c/u</span>`)}
     ${drow("Coste total", `<strong>${money2(p.line_cost, currency)}</strong>`)}
   </dl></div></div>`;
-  return `<div class="order-item-wrap">
+  return `<div class="order-item-wrap ${p.included ? "" : "excluded"}" data-part-id="${p.id}">
     <div class="order-item" data-expand-part>
+      <input type="checkbox" class="incl-check" data-incl-part="${p.id}" ${p.included ? "checked" : ""}
+        title="${p.included ? "En la cuenta: suma al coste del proyecto" : "Fuera de la cuenta: no suma al coste"}">
       ${smallThumb}
       <span class="oi-names"><span class="oi-name">${escHtml(gname)}</span></span>
       <span class="muted">${escHtml(p.material_type)}${p.weight_g ? " · " + p.weight_g + " g" : ""}${p.printer_name ? " · " + escHtml(p.printer_name) : ""}${p.quantity > 1 ? " · ×" + p.quantity : ""}</span>
@@ -2732,6 +2900,8 @@ function addProjectPart(host, pt, prepend) {
   </div>`);
   prepend ? host.prepend(row) : host.appendChild(row);
   row._gcur = pt.gcode_filename || "";
+  // Preserva la marca "en la cuenta" al re-guardar (el toggle vive en la tarjeta).
+  row.dataset.included = pt.included === false ? "0" : "1";
   row.querySelector(".pp-printer").addEventListener("change", () => loadPartGcodes(row));
   row.querySelector(".pp-gcode").addEventListener("change", () => autofillPart(row));
   if (pt.printer_id) loadPartGcodes(row);
@@ -2856,6 +3026,7 @@ function projectForm(pr = {}) {
       weight_g: parseFloat(r.querySelector(".pp-weight").value) || 0,
       print_time_s: (parseFloat(r.querySelector(".pp-time").value) || 0) * 60,
       quantity: Math.max(1, parseInt(r.querySelector(".pp-qty").value) || 1),
+      included: r.dataset.included !== "0",
     }));
     const body = {
       name: form.querySelector(".pf-name").value || "Proyecto",

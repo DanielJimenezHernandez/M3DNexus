@@ -686,3 +686,38 @@ body.side-collapsed #cotiz-bar { left: var(--side-w-collapsed); }
 .stars span:hover { color: var(--warn); filter: brightness(1.2); }
 .review-notes { width: 100%; max-width: 560px; display: block; margin-bottom: 0.5rem; }
 .jc-detail .oi-detail { padding: 0.6rem 0; }
+
+/* Badge de impresión multicolor (las purgas no están en el peso del slicer). */
+.pill.multicolor { background: rgba(167,102,255,0.18); color: #b98aff; }
+
+/* Multimaterial: lista de filamentos usados en el renglón y en el detalle. */
+.mat-multi { margin-top: 0.25rem; }
+.mat-multi-row { font-size: 0.72rem; color: var(--muted); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 210px; line-height: 1.5; }
+.gfil-panel { margin-top: 0.8rem; padding-top: 0.6rem; border-top: 1px solid var(--border); }
+.gfil-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+.gfil-row:last-child { border-bottom: none; }
+.gfil-name { font-weight: 600; }
+
+/* Selectores de material en el detalle (mono y por filamento en multi). */
+.mat-name { display: inline-flex; align-items: center; gap: 0.3rem; }
+.mat-select { max-width: 320px; }
+.gfil-row .gfil-sel { flex: 1 1 200px; max-width: 320px; width: auto; }
+.gfil-cobra { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap;
+  font-size: 0.8rem; color: var(--muted); }
+.gfil-cobra input { width: auto; }
+.gfil-row .gfil-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Precio del filamento en el panel multimaterial (azul, entre nombre y selector). */
+.gfil-price { color: var(--accent); font-weight: 600; font-size: 0.82rem; white-space: nowrap; }
+.pill.gfil-max { background: rgba(79,140,255,0.18); color: var(--accent); }
+
+/* Cantidad editable en el detalle de una parte de proyecto. */
+.ppart-qty { width: 70px; display: inline-block; }
+
+/* "En la cuenta": checkbox por parte/extra en la tarjeta del proyecto. Lo
+   desmarcado se ve atenuado y con el coste tachado (no suma al total). */
+.incl-check { width: 16px; height: 16px; flex: 0 0 auto; cursor: pointer; accent-color: var(--accent); }
+.order-item-wrap.excluded .order-item > *:not(.incl-check) { opacity: 0.45; }
+.order-item-wrap.excluded .oi-cost { text-decoration: line-through; }

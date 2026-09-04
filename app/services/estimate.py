@@ -143,11 +143,16 @@ def estimate_from_history(session: Session, printer: Printer, filename: str) -> 
         .order_by(PrintJob.end_time.desc().nulls_last())
     )
     meta = (job.raw_metadata if job else None) or {}
-    return _estimate_from_meta(session, printer, filename, meta, source="history")
+    # Purga medida en el último print de ese gcode (multimaterial): el slicer no
+    # la incluye, así que el peso de la pieza es estimado + purga.
+    purge = (job.purge_weight_g or 0.0) if job else 0.0
+    return _estimate_from_meta(session, printer, filename, meta, source="history",
+                               extra_weight_g=purge)
 
 
 def _estimate_from_meta(
-    session: Session, printer: Printer, filename: str, meta: dict, source: str
+    session: Session, printer: Printer, filename: str, meta: dict, source: str,
+    extra_weight_g: float = 0.0,
 ) -> dict:
     """Núcleo del cálculo de estimación a partir de un dict de metadatos."""
     # Resuelve el filamento por nombre (sin crear nada en una estimación).
@@ -160,7 +165,7 @@ def _estimate_from_meta(
     weight_g = meta.get("filament_weight_total")
     if not weight_g:
         weight_g = mm_to_grams(meta.get("filament_total") or 0.0, density_g_cm3=density)
-    weight_g = round(float(weight_g), 2)
+    weight_g = round(float(weight_g) + max(0.0, extra_weight_g), 2)
 
     est_s = float(meta.get("estimated_time") or 0.0)
     hours = est_s / 3600.0

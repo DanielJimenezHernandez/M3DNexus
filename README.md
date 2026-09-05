@@ -443,8 +443,11 @@ Plantilla de nombre de salida en OrcaSlicer (sin ambigüedad, cada campo se
 autoidentifica por su delimitador/sufijo):
 
 ```
-Gcode {input_filename_base} [{plate_name}] {num_objects}obj {num_instances}x {int(extruded_volume_total)}mm3 {filament_type[0]} {print_time} @{printer_preset}
+Gcode {input_filename_base} [{plate_name}] {num_objects}obj {num_instances}x {int(extruded_volume_total)}mm3 {filament_type[0]} {print_time} @{printer_preset}.gcode
 ```
+
+(Orca **no** añade la extensión por sí solo: el `.gcode` va dentro de la
+plantilla.)
 
 La plataforma podrá parsear este patrón para, p. ej., precargar `cama ÷ N` con
 `num_objects` al agregar el gcode a un proyecto. Los gcodes con el patrón viejo

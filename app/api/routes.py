@@ -71,6 +71,7 @@ from ..services.filament import (
     parse_all_filaments,
     parse_filament,
 )
+from ..services.gcode_name import parse_gcode_name
 from ..services.ingest import _borrow_energy, apply_costs, get_settings
 from ..services.loaded import resolve_slots, set_slots
 from ..services.orca_import import apply_import, plan_import
@@ -1182,6 +1183,8 @@ def add_job_to_project(
     if not job:
         raise HTTPException(404, "Impresión no encontrada")
     mat = db.get(Material, job.material_id) if job.material_id else None
+    # Si el nombre sigue la convención estándar, num_objects precarga "cama ÷ N".
+    parsed = parse_gcode_name(job.filename)
     project.parts.append(ProjectPart(
         printer_id=job.printer_id,
         gcode_filename=job.filename,
@@ -1190,6 +1193,7 @@ def add_job_to_project(
         weight_g=(job.filament_weight_g or 0.0) + (job.purge_weight_g or 0.0),
         print_time_s=job.print_duration_s or 0.0,  # tiempo real
         quantity=1,
+        pieces_per_bed=max(1, parsed["objects"]) if parsed else 1,
     ))
     db.commit()
     return {"ok": True, "project_id": project.id}
@@ -1222,8 +1226,17 @@ def update_project_part(part_id: int, payload: dict = Body(...), db: Session = D
         part.quantity = qty
     if "included" in payload:
         part.included = bool(payload.get("included"))
+    if "pieces_per_bed" in payload:
+        try:
+            bed = int(payload.get("pieces_per_bed"))
+        except (TypeError, ValueError):
+            raise HTTPException(422, "pieces_per_bed debe ser un entero")
+        if bed < 1:
+            raise HTTPException(422, "pieces_per_bed debe ser al menos 1")
+        part.pieces_per_bed = bed
     db.commit()
-    return {"ok": True, "quantity": part.quantity, "included": part.included}
+    return {"ok": True, "quantity": part.quantity, "included": part.included,
+            "pieces_per_bed": part.pieces_per_bed}
 
 
 @router.post("/projects/{project_id}/extra-included", status_code=200)

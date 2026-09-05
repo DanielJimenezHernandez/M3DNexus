@@ -83,6 +83,7 @@ def _migrate() -> None:
             "printer_id": "ALTER TABLE project_parts ADD COLUMN printer_id INTEGER",
             "gcode_filename": "ALTER TABLE project_parts ADD COLUMN gcode_filename VARCHAR",
             "included": "ALTER TABLE project_parts ADD COLUMN included BOOLEAN DEFAULT 1",
+            "pieces_per_bed": "ALTER TABLE project_parts ADD COLUMN pieces_per_bed INTEGER DEFAULT 1",
         },
         "projects": {
             "extra_expenses": "ALTER TABLE projects ADD COLUMN extra_expenses JSON",

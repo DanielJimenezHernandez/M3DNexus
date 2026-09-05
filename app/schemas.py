@@ -229,6 +229,13 @@ class ProjectPartIn(BaseModel):
     quantity: int = 1
     print_time_s: float = 0.0
     included: bool = True   # False = se ve pero no suma a la cuenta
+    # Piezas iguales por cama: divide el coste y el peso del gcode.
+    pieces_per_bed: int = 1
+
+    @field_validator("pieces_per_bed")
+    @classmethod
+    def _bed(cls, v: int) -> int:
+        return max(1, v)
 
     @field_validator("quantity")
     @classmethod

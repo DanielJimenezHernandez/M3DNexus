@@ -721,3 +721,8 @@ body.side-collapsed #cotiz-bar { left: var(--side-w-collapsed); }
 .incl-check { width: 16px; height: 16px; flex: 0 0 auto; cursor: pointer; accent-color: var(--accent); }
 .order-item-wrap.excluded .order-item > *:not(.incl-check) { opacity: 0.45; }
 .order-item-wrap.excluded .oi-cost { text-decoration: line-through; }
+
+/* Piezas por cama en el renglón de parte de proyecto. */
+.bed-wrap { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem;
+  white-space: nowrap; flex: 0 0 auto; }
+.ppart-bed { width: 56px; }

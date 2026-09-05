@@ -2773,6 +2773,16 @@ function renderProjectsBoard() {
         toast(`Cantidad: ${qty}`); loadProjects();
       } catch (e) { toast("Error: " + e.message); }
     }));
+  // Piezas por cama: divide el coste/peso del gcode para ponderar por pieza.
+  host.querySelectorAll(".ppart-bed").forEach((inp) =>
+    inp.addEventListener("change", async () => {
+      const bed = Math.max(1, parseInt(inp.value) || 1);
+      try {
+        await api.send(`/api/project-parts/${inp.dataset.part}`, "POST", { pieces_per_bed: bed });
+        toast(bed > 1 ? `Coste del gcode ÷ ${bed} piezas` : "Cama de 1 pieza");
+        loadProjects();
+      } catch (e) { toast("Error: " + e.message); }
+    }));
   // Checkbox "en la cuenta": lo desmarcado se ve pero no suma al coste.
   host.querySelectorAll("[data-incl-part]").forEach((chk) =>
     chk.addEventListener("change", async () => {
@@ -2845,6 +2855,8 @@ function projPartRow(p) {
       <span class="oi-names"><span class="oi-name">${escHtml(gname)}</span></span>
       <span class="muted">${escHtml(p.material_type)}${p.weight_g ? " · " + p.weight_g + " g" : ""}${p.printer_name ? " · " + escHtml(p.printer_name) : ""}${p.quantity > 1 ? " · ×" + p.quantity : ""}</span>
       <span class="spacer"></span>
+      <label class="bed-wrap muted" title="Piezas iguales en la cama de impresión: el coste y el peso del gcode se dividen entre este número para ponderar por pieza">
+        cama ÷ <input type="number" min="1" class="ppart-bed" data-part="${p.id}" value="${p.pieces_per_bed || 1}"></label>
       <span class="oi-cost cost-val ${p.no_price ? "warn" : "ok"}"${p.no_price ? ` data-fix-type="${escHtml(p.material_type || "")}" title="Ningún ${escHtml(p.material_type || "material")} tiene precio/kg — clic para ponerlo"` : ""}>${money2(p.line_cost, currency)}</span>
       <span class="oi-caret" aria-hidden="true">▸</span>
     </div>
@@ -2857,15 +2869,19 @@ function projPartRow(p) {
 async function loadProjectIntoEstimacion(pr) {
   if (!pr) return;
   await ensureRefs();
-  estFiles = pr.parts.map((p) => ({
-    filename: (p.gcode_filename || "").split("/").pop() || (p.material_type || "parte"),
-    weight_g: p.weight_g || 0,
-    time_s: p.print_time_s || 0,
-    filament_type: p.material_type,
-    thumb: p.gcode_filename ? `/api/gcode-thumbnail?filename=${encodeURIComponent(p.gcode_filename)}` : null,
-    material_id: pickMaterialForType(p.material_type),
-    quantity: p.quantity || 1,
-  }))
+  estFiles = pr.parts.map((p) => {
+    // Cama con varias piezas: a la estimación va la fracción POR PIEZA.
+    const bed = Math.max(1, p.pieces_per_bed || 1);
+    return {
+      filename: (p.gcode_filename || "").split("/").pop() || (p.material_type || "parte"),
+      weight_g: (p.weight_g || 0) / bed,
+      time_s: (p.print_time_s || 0) / bed,
+      filament_type: p.material_type,
+      thumb: p.gcode_filename ? `/api/gcode-thumbnail?filename=${encodeURIComponent(p.gcode_filename)}` : null,
+      material_id: pickMaterialForType(p.material_type),
+      quantity: p.quantity || 1,
+    };
+  })
   // Los gastos extra del proyecto viajan como partes extra (🔧, coste fijo).
   .concat((pr.extra_expenses || []).map((e) => ({
     is_extra: true, filename: e.label || "extra",
@@ -2886,6 +2902,16 @@ function projTypeOptions(sel) {
   }).join("");
 }
 
+// Parseo del patrón estándar de nombre de gcode (README, convención 2026-09):
+// Gcode {base} [{plate}] {N}obj {M}x {V}mm3 {tipo} {tiempo} @{preset}.gcode
+const GCODE_NAME_RX = /^Gcode (.+?) \[(.*?)\] (\d+)obj (\d+)x (\d+)mm3 ([A-Za-z0-9+\-]+) ((?:\d+[dhms])+) @(.+)\.gcode$/;
+function parseGcodeName(filename) {
+  const m = GCODE_NAME_RX.exec(String(filename || "").split("/").pop());
+  if (!m) return null;
+  return { base: m[1], plate: m[2], objects: +m[3], instances: +m[4],
+           volume_mm3: +m[5], filament_type: m[6], print_time: m[7], preset: m[8] };
+}
+
 function addProjectPart(host, pt, prepend) {
   const row = el(`<div class="pf-part">
     <div class="pp-thumb ph" title="Miniatura del gcode"></div>
@@ -2900,8 +2926,9 @@ function addProjectPart(host, pt, prepend) {
   </div>`);
   prepend ? host.prepend(row) : host.appendChild(row);
   row._gcur = pt.gcode_filename || "";
-  // Preserva la marca "en la cuenta" al re-guardar (el toggle vive en la tarjeta).
+  // Preserva marcas que se editan en la tarjeta, no aquí, al re-guardar.
   row.dataset.included = pt.included === false ? "0" : "1";
+  row.dataset.bed = String(pt.pieces_per_bed || 1);
   row.querySelector(".pp-printer").addEventListener("change", () => loadPartGcodes(row));
   row.querySelector(".pp-gcode").addEventListener("change", () => autofillPart(row));
   if (pt.printer_id) loadPartGcodes(row);
@@ -2943,6 +2970,11 @@ async function autofillPart(row) {
   const gcode = row.querySelector(".pp-gcode").value;
   row._gcur = gcode;
   if (!gcode) return;
+  // Nombre con el patrón estándar → num_objects precarga "cama ÷ N".
+  // Solo al cambiar el gcode; si no matchea, deshace solo lo que puso el autofill.
+  const parsed = parseGcodeName(gcode);
+  if (parsed && parsed.objects >= 1) { row.dataset.bed = String(parsed.objects); row._bedAuto = true; }
+  else if (row._bedAuto) { row.dataset.bed = "1"; row._bedAuto = false; }
   let info;
   try { info = await api.get(`/api/gcode-info?printer_id=${pid}&filename=${encodeURIComponent(gcode)}`); }
   catch (e) { return; }
@@ -3027,6 +3059,7 @@ function projectForm(pr = {}) {
       print_time_s: (parseFloat(r.querySelector(".pp-time").value) || 0) * 60,
       quantity: Math.max(1, parseInt(r.querySelector(".pp-qty").value) || 1),
       included: r.dataset.included !== "0",
+      pieces_per_bed: Math.max(1, parseInt(r.dataset.bed) || 1),
     }));
     const body = {
       name: form.querySelector(".pf-name").value || "Proyecto",

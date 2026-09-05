@@ -453,6 +453,10 @@ class ProjectPart(Base):
     # False = la parte se ve pero NO suma a la cuenta del proyecto (pruebas,
     # iteraciones descartadas…).
     included: Mapped[bool] = mapped_column(default=True)
+    # Piezas iguales que salen de UNA impresión de este gcode (cama llena): el
+    # coste y el peso del gcode se dividen entre este número para ponderar por
+    # pieza del producto.
+    pieces_per_bed: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     project: Mapped["Project"] = relationship(back_populates="parts")

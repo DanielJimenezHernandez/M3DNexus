@@ -427,6 +427,30 @@ entidad** por debajo (partes + archivos + coste + fotos); solo cambia la
 categoría/etiqueta con que se ven. Lo que aplica a proyectos aplica a pedidos y
 viceversa.
 
+### Convención de nombres de archivo (estándar 2026-09)
+
+Los tres tipos de archivo conviven en la misma carpeta de proyecto en Windows;
+el **prefijo del nombre identifica el tipo** (clave porque modelo y proyecto de
+Orca pueden compartir extensión `.3mf`):
+
+| Prefijo     | Tipo                        | Ejemplo |
+|-------------|-----------------------------|---------|
+| `Gcode `    | gcode listo para imprimir   | `Gcode Maceta Suculenta [Plate 1] 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode` |
+| `Modelo - ` | modelo (STL/STEP/3MF)       | `Modelo - Maceta Suculenta.stl` |
+| `OSpj - `   | proyecto de OrcaSlicer      | `OSpj - Maceta Suculenta.3mf` |
+
+Plantilla de nombre de salida en OrcaSlicer (sin ambigüedad, cada campo se
+autoidentifica por su delimitador/sufijo):
+
+```
+Gcode {input_filename_base} [{plate_name}] {num_objects}obj {num_instances}x {int(extruded_volume_total)}mm3 {filament_type[0]} {print_time} @{printer_preset}
+```
+
+La plataforma podrá parsear este patrón para, p. ej., precargar `cama ÷ N` con
+`num_objects` al agregar el gcode a un proyecto. Los gcodes con el patrón viejo
+siguen funcionando (la correlación es por cadena exacta); un re-slice con el
+patrón nuevo simplemente cuenta como archivo nuevo.
+
 ### Próximo paso (arrancar por aquí)
 
 - [ ] **Productizar rutas: BD + capa de archivos**, para seguir desarrollando

@@ -231,3 +231,71 @@ def test_incluir_en_la_cuenta(env):
     assert d3["extras_cost"] == pytest.approx(109.0, abs=0.01)
     assert env.post(f"/api/projects/{pid}/extra-included",
                     json={"index": 9, "included": True}).status_code == 404
+
+
+def test_piezas_por_cama_divide(env):
+    # Gcode de 100 g / 1 h con 4 piezas por cama → por pieza: material 10, y el
+    # peso reconciliado es 25 g. line = unit × qty.
+    body = {"name": "P", "total_weight_g": None, "parts": [
+        {"material_type": "PLA", "weight_g": 100, "quantity": 1,
+         "print_time_s": 3600, "pieces_per_bed": 4}]}
+    d = env.post("/api/projects", json=body).json()
+    p = d["parts"][0]
+    assert p["pieces_per_bed"] == 4
+    # material por pieza: (0.1 × 400)/4 = 10; máquina: 1.4/4 = 0.35
+    assert p["material"] == pytest.approx(10.0, abs=0.01)
+    assert p["machine"] == pytest.approx(0.35, abs=0.02)
+    assert d["reconciliation"]["sum_parts_g"] == pytest.approx(25.0, abs=0.1)
+    # cambiar por endpoint a 2 → material 20
+    assert env.post(f"/api/project-parts/{p['id']}", json={"pieces_per_bed": 2}).status_code == 200
+    d2 = env.get("/api/projects").json()[0]
+    assert d2["parts"][0]["material"] == pytest.approx(20.0, abs=0.01)
+    assert env.post(f"/api/project-parts/{p['id']}", json={"pieces_per_bed": 0}).status_code == 422
+
+
+def test_parse_gcode_name():
+    from app.services.gcode_name import parse_gcode_name
+    d = parse_gcode_name(
+        "Gcode Maceta Suculenta [Plate 1] 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode")
+    assert d == {"base": "Maceta Suculenta", "plate": "Plate 1", "objects": 4,
+                 "instances": 4, "volume_mm3": 25431, "filament_type": "PLA",
+                 "print_time": "3h37m", "preset": "Voron 2.4 0.4 Nozzle"}
+    # base con guiones + subcarpeta en la ruta
+    d = parse_gcode_name(
+        "sub/Gcode Trofeo - Base v2 [Plate 12] 12obj 12x 8000mm3 PLA+ 44m1s @Creality Hi.gcode")
+    assert d["base"] == "Trofeo - Base v2" and d["objects"] == 12
+    # patrón viejo (plate y objetos pegados) y nombres libres → None
+    assert parse_gcode_name(
+        "Gcode Maceta - Plate 14x Objects 4x Instances - 25431mm3 - PLA - 3h37m@ Voron.gcode") is None
+    assert parse_gcode_name("benchy.gcode") is None
+    assert parse_gcode_name(None) is None
+
+
+def test_add_job_precarga_piezas_por_cama(tmp_path):
+    # Nombre con la convención estándar → pieces_per_bed = num_objects del nombre.
+    from datetime import datetime, timezone
+    from app.models import PrintJob
+    engine = create_engine(f"sqlite:///{tmp_path / 'jb.db'}")
+    Base.metadata.create_all(engine)
+    Local = sessionmaker(bind=engine)
+    fname = "Gcode Llavero [Plate 1] 6obj 6x 9000mm3 PLA 1h2m @Voron.gcode"
+    with Local() as s:
+        s.add(Printer(id=1, name="A", host="1"))
+        s.add(PrintJob(id=9, printer_id=1, moonraker_job_id="1", filename=fname,
+                       status="completed", print_duration_s=3720, filament_weight_g=54,
+                       start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                       end_time=datetime(2026, 1, 1, 2, tzinfo=timezone.utc)))
+        s.commit()
+    import app.db as dbmod
+    orig = dbmod._engine
+    dbmod._engine = engine
+    dbmod.SessionLocal.configure(bind=engine)
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    pid = c.post("/api/projects", json={"name": "P", "parts": []}).json()["id"]
+    assert c.post(f"/api/projects/{pid}/add-job", json={"job_id": 9}).status_code == 201
+    part = c.get("/api/projects").json()[0]["parts"][0]
+    assert part["pieces_per_bed"] == 6
+    dbmod._engine = orig
+    dbmod.SessionLocal.configure(bind=orig)

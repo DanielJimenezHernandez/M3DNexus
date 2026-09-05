@@ -48,8 +48,11 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
         per_h = fleet["avg_per_h"] if fleet else 0.0
 
         qty = p.quantity or 1
-        material = (p.weight_g or 0.0) / 1000.0 * ppk
-        machine = (p.print_time_s or 0.0) / 3600.0 * per_h
+        # Varias piezas iguales en una cama: el gcode entero se divide entre
+        # ellas para ponderar POR PIEZA (coste y peso).
+        bed = max(1, p.pieces_per_bed or 1)
+        material = (p.weight_g or 0.0) / 1000.0 * ppk / bed
+        machine = (p.print_time_s or 0.0) / 3600.0 * per_h / bed
         unit = material + machine
         # Una parte excluida se lista con su coste, pero NO suma a la cuenta
         # (ni al peso estimado que reconcilia contra la báscula).
@@ -57,7 +60,7 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
         if included:
             mat_total += material * qty
             mach_total += machine * qty
-            weight_total += (p.weight_g or 0.0) * qty
+            weight_total += (p.weight_g or 0.0) / bed * qty
         parts_out.append({
             "id": p.id,
             "name": p.name,
@@ -71,6 +74,7 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
             "price_per_kg": ppk,
             "no_price": ppk <= 0,
             "included": included,
+            "pieces_per_bed": bed,
             "material": round(material, 2),
             "machine": round(machine, 2),
             "unit_cost": round(unit, 2),

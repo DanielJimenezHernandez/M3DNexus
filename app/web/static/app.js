@@ -2908,18 +2908,20 @@ function projTypeOptions(sel) {
 
 // Parseo del patrón estándar de nombre de gcode (README, convención 2026-09):
 // Convención de nombres (README): todos los campos entre paréntesis —
-// Gcode ({base}) ({plate}) ({N}obj) ({M}x) ({V}mm3) ({tipo}) ({tiempo}) (~{proceso}) (@{preset}).gcode
-// El proceso (~) es opcional; se acepta también el estilo previo sin paréntesis
-// en los campos con sufijo. Mismos grupos y orden en ambos regex.
-const GCODE_NAME_RX = /^Gcode \((.+?)\) \((.*?)\) \((\d+)obj\) \((\d+)x\) \((\d+)mm3\) \(([A-Za-z0-9+\-]+)\) \(((?:\d+[dhms])+)\) (?:\(~(.+)\) )?\(@(.+)\)\.gcode$/;
+// forma corta: Gcode ({base}) ({plate}) ({N}obj) ({tipo}) ({tiempo}) (~{proceso}).gcode
+// ({M}x), ({V}mm3) y (@{preset}) son opcionales (forma larga). El lookahead del
+// proceso evita que se trague el campo siguiente. Se acepta también el estilo
+// previo sin paréntesis en los campos con sufijo. Mismos grupos y orden.
+const GCODE_NAME_RX = /^Gcode \((.+?)\) \((.*?)\) \((\d+)obj\)(?: \((\d+)x\))?(?: \((\d+)mm3\))? \(([A-Za-z0-9+\-]+)\) \(((?:\d+[dhms])+)\)(?: \(~((?:(?!\) \().)+)\))?(?: \(@(.+)\))?\.gcode$/;
 const GCODE_NAME_RX_LEGACY = /^Gcode (.+?) \((.*?)\) (\d+)obj (\d+)x (\d+)mm3 ([A-Za-z0-9+\-]+) ((?:\d+[dhms])+) (?:~(.+) )?@(.+)\.gcode$/;
 function parseGcodeName(filename) {
   const name = String(filename || "").split("/").pop();
   const m = GCODE_NAME_RX.exec(name) || GCODE_NAME_RX_LEGACY.exec(name);
   if (!m) return null;
-  return { base: m[1], plate: m[2], objects: +m[3], instances: +m[4],
-           volume_mm3: +m[5], filament_type: m[6], print_time: m[7],
-           process: m[8] || null, preset: m[9] };
+  return { base: m[1], plate: m[2], objects: +m[3],
+           instances: m[4] ? +m[4] : null, volume_mm3: m[5] ? +m[5] : null,
+           filament_type: m[6], print_time: m[7],
+           process: m[8] || null, preset: m[9] || null };
 }
 
 function addProjectPart(host, pt, prepend) {

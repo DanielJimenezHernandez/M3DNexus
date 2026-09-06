@@ -275,6 +275,17 @@ def test_parse_gcode_name():
         "(~0.20mm Standard @Voron) (@Voron 2.4 0.4 Nozzle).gcode")
     assert d["process"] == "0.20mm Standard @Voron"
     assert d["preset"] == "Voron 2.4 0.4 Nozzle"
+    # FORMA CORTA (límite de 255 bytes en la impresora): sin Mx, mm3 ni @preset
+    d = parse_gcode_name(
+        "Gcode (Miss_Fanny) (Fornite Mario Demo) (2obj) (PLA) (52m28s) "
+        "(~process template @Creality Creality Hi 0.4 nozzle).gcode")
+    assert d["base"] == "Miss_Fanny" and d["plate"] == "Fornite Mario Demo"
+    assert d["objects"] == 2 and d["filament_type"] == "PLA"
+    assert d["process"] == "process template @Creality Creality Hi 0.4 nozzle"
+    assert d["instances"] is None and d["volume_mm3"] is None and d["preset"] is None
+    # corta sin proceso
+    d = parse_gcode_name("Gcode (Cubo) () (1obj) (PA-CF) (1d2h5m).gcode")
+    assert d["objects"] == 1 and d["process"] is None and d["preset"] is None
     # Compatibilidad: estilo previo (campos con sufijo sin paréntesis, ~/@ a pelo).
     d = parse_gcode_name(
         "Gcode Maceta Suculenta (Plate 1) 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode")

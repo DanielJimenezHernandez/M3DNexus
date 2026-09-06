@@ -435,7 +435,7 @@ Orca pueden compartir extensión `.3mf`):
 
 | Prefijo     | Tipo                        | Ejemplo |
 |-------------|-----------------------------|---------|
-| `Gcode `    | gcode listo para imprimir   | `Gcode (Maceta Suculenta) (Plate 1) (4obj) (4x) (25431mm3) (PLA) (3h37m) (~0.20mm Standard) (@Voron 2.4 0.4 Nozzle).gcode` |
+| `Gcode `    | gcode listo para imprimir   | `Gcode (Maceta Suculenta) (Plate 1) (4obj) (PLA) (3h37m) (~0.20mm Standard).gcode` |
 | `Modelo - ` | modelo (STL/STEP/3MF)       | `Modelo - Maceta Suculenta.stl` |
 | `OSpj - `   | proyecto de OrcaSlicer      | `OSpj - Maceta Suculenta.3mf` |
 
@@ -443,12 +443,21 @@ Plantilla de nombre de salida en OrcaSlicer (sin ambigüedad, cada campo se
 autoidentifica por su delimitador/sufijo):
 
 ```
-Gcode ({input_filename_base}) ({plate_name}) ({num_objects}obj) ({num_instances}x) ({int(extruded_volume_total)}mm3) ({filament_type[0]}) ({print_time}) (~{print_preset}) (@{printer_preset}).gcode
+Gcode ({input_filename_base}) ({plate_name}) ({num_objects}obj) ({filament_type[0]}) ({print_time}) (~{print_preset}).gcode
 ```
 
 (Orca **no** añade la extensión por sí solo: el `.gcode` va dentro de la
 plantilla. Y la placa va entre **paréntesis**, nunca corchetes — `[...]` es la
 sintaxis legacy de variables de Orca y rompe la plantilla.)
+
+El filesystem de la impresora limita cada nombre a **255 bytes** (subir un
+nombre más largo falla con *File name too long*), por eso la forma corta es la
+recomendada. El parser acepta además los campos opcionales
+`({num_instances}x)`, `({int(extruded_volume_total)}mm3)` y
+`(@{printer_preset})` en ese orden, si algún día se quieren de vuelta; la
+impresora destino ya la conoce la plataforma, así que `@preset` no aporta.
+Para acortar aún más: renombra los **procesos** en Orca a nombres breves
+("0.4 Standard" mejor que "process template @Creality Creality Hi 0.4 nozzle").
 
 El `~{print_preset}` es el **proceso** (perfil de laminado): viaja en el propio
 nombre y la UI lo muestra en el detalle expandido de Impresiones. Es opcional

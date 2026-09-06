@@ -2,9 +2,13 @@
 
 Convención documentada en el README ("Convención de nombres de archivo"):
 TODOS los campos van entre paréntesis, cada uno con el sufijo/marcador que
-le da significado por dentro:
+le da significado por dentro. Forma corta recomendada (los nombres de la
+impresora tienen un límite de 255 bytes):
 
-    Gcode ({base}) ({plate}) ({N}obj) ({M}x) ({V}mm3) ({tipo}) ({tiempo}) (~{proceso}) (@{preset}).gcode
+    Gcode ({base}) ({plate}) ({N}obj) ({tipo}) ({tiempo}) (~{proceso}).gcode
+
+Los campos ({M}x), ({V}mm3) y (@{preset}) son opcionales: el mismo regex
+acepta también la forma larga que los incluye.
 
 Notas de diseño:
 - Paréntesis y no corchetes: "[...]" es sintaxis legacy de variables en Orca
@@ -25,12 +29,16 @@ import re
 GCODE_NAME_RX = re.compile(
     r"^Gcode \((?P<base>.+?)\) "
     r"\((?P<plate>.*?)\) "
-    r"\((?P<objects>\d+)obj\) \((?P<instances>\d+)x\) "
-    r"\((?P<volume_mm3>\d+)mm3\) "
-    r"\((?P<filament_type>[A-Za-z0-9+\-]+)\) "
-    r"\((?P<print_time>(?:\d+[dhms])+)\) "
-    r"(?:\(~(?P<process>.+)\) )?"
-    r"\(@(?P<preset>.+)\)\.gcode$"
+    r"\((?P<objects>\d+)obj\)"
+    r"(?: \((?P<instances>\d+)x\))?"
+    r"(?: \((?P<volume_mm3>\d+)mm3\))?"
+    r" \((?P<filament_type>[A-Za-z0-9+\-]+)\)"
+    r" \((?P<print_time>(?:\d+[dhms])+)\)"
+    # El proceso no puede contener ") (" (separador de campos): el lookahead
+    # evita que un proceso codicioso se trague el campo (@preset) siguiente.
+    r"(?: \(~(?P<process>(?:(?!\) \().)+)\))?"
+    r"(?: \(@(?P<preset>.+)\))?"
+    r"\.gcode$"
 )
 
 # Estilo anterior de la misma convención (2026-09, previo a uniformar paréntesis).
@@ -57,5 +65,5 @@ def parse_gcode_name(filename: str | None) -> dict | None:
         return None
     d = m.groupdict()
     for key in ("objects", "instances", "volume_mm3"):
-        d[key] = int(d[key])
+        d[key] = int(d[key]) if d[key] is not None else None
     return d

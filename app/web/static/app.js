@@ -351,11 +351,15 @@ function jobDetailHTML(j, pmap, mById) {
     `<span class="${i < (j.rating || 0) ? "on" : ""}" data-star="${i + 1}">★</span>`).join("");
   const badges = (j.in_use && j.in_use.length)
     ? j.in_use.map((u) => `<span class="use-badge ${u.kind}" data-use-kind="${u.kind}">${escHtml(u.label)}</span>`).join(" ") : null;
+  // Nombre con la convención estándar → el proceso (perfil de laminado) viaja
+  // en el propio filename y aquí se hace visible.
+  const gname = parseGcodeName(j.filename);
   return `<div class="oi-detail job-detail">
     ${bigThumb}
     <div class="oi-detail-body">
       <dl class="oi-dl">
         ${drow("Gcode", escHtml(j.filename || "—"))}
+        ${drow("Proceso", gname && gname.process ? `<b>${escHtml(gname.process)}</b>` : null)}
         ${drow("Impresora", escHtml(pmap[j.printer_id] || String(j.printer_id)))}
         ${drow("Estado", `<span class="pill ${j.status}">${j.status}</span>${j.needs_review ? ' <span class="pill review">revisar</span>' : ""}`)}
         ${drow("Inicio", fmtDate(j.start_time))}
@@ -2903,13 +2907,15 @@ function projTypeOptions(sel) {
 }
 
 // Parseo del patrón estándar de nombre de gcode (README, convención 2026-09):
-// Gcode {base} ({plate}) {N}obj {M}x {V}mm3 {tipo} {tiempo} @{preset}.gcode
-const GCODE_NAME_RX = /^Gcode (.+?) \((.*?)\) (\d+)obj (\d+)x (\d+)mm3 ([A-Za-z0-9+\-]+) ((?:\d+[dhms])+) @(.+)\.gcode$/;
+// Gcode {base} ({plate}) {N}obj {M}x {V}mm3 {tipo} {tiempo} ~{proceso} @{preset}.gcode
+// El proceso (~) es opcional: nombres previos a su adopción no lo llevan.
+const GCODE_NAME_RX = /^Gcode (.+?) \((.*?)\) (\d+)obj (\d+)x (\d+)mm3 ([A-Za-z0-9+\-]+) ((?:\d+[dhms])+) (?:~(.+) )?@(.+)\.gcode$/;
 function parseGcodeName(filename) {
   const m = GCODE_NAME_RX.exec(String(filename || "").split("/").pop());
   if (!m) return null;
   return { base: m[1], plate: m[2], objects: +m[3], instances: +m[4],
-           volume_mm3: +m[5], filament_type: m[6], print_time: m[7], preset: m[8] };
+           volume_mm3: +m[5], filament_type: m[6], print_time: m[7],
+           process: m[8] || null, preset: m[9] };
 }
 
 function addProjectPart(host, pt, prepend) {

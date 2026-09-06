@@ -259,11 +259,21 @@ def test_parse_gcode_name():
         "Gcode Maceta Suculenta (Plate 1) 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode")
     assert d == {"base": "Maceta Suculenta", "plate": "Plate 1", "objects": 4,
                  "instances": 4, "volume_mm3": 25431, "filament_type": "PLA",
-                 "print_time": "3h37m", "preset": "Voron 2.4 0.4 Nozzle"}
+                 "print_time": "3h37m", "process": None,
+                 "preset": "Voron 2.4 0.4 Nozzle"}
+    assert d["process"] is None  # nombre sin proceso: sigue matcheando
     # base con guiones + subcarpeta en la ruta
     d = parse_gcode_name(
         "sub/Gcode Trofeo - Base v2 (Plate 12) 12obj 12x 8000mm3 PLA+ 44m1s @Creality Hi.gcode")
     assert d["base"] == "Trofeo - Base v2" and d["objects"] == 12
+    # con proceso (perfil de laminado), incluso si el proceso contiene "@"
+    d = parse_gcode_name(
+        "Gcode Llavero (Plate 1) 6obj 6x 9000mm3 PLA 1h2m ~0.20mm Standard @Voron @Voron 2.4 0.4 Nozzle.gcode")
+    assert d["process"] == "0.20mm Standard @Voron"
+    assert d["preset"] == "Voron 2.4 0.4 Nozzle"
+    d = parse_gcode_name(
+        "Gcode Llavero (Plate 1) 6obj 6x 9000mm3 PLA 1h2m ~0.16mm Detalle @Creality Hi.gcode")
+    assert d["process"] == "0.16mm Detalle" and d["preset"] == "Creality Hi"
     # patrón viejo (plate y objetos pegados) y nombres libres → None
     assert parse_gcode_name(
         "Gcode Maceta - Plate 14x Objects 4x Instances - 25431mm3 - PLA - 3h37m@ Voron.gcode") is None

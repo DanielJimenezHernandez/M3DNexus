@@ -255,22 +255,30 @@ def test_piezas_por_cama_divide(env):
 
 def test_parse_gcode_name():
     from app.services.gcode_name import parse_gcode_name
+    # Formato actual: todos los campos entre paréntesis.
     d = parse_gcode_name(
-        "Gcode Maceta Suculenta (Plate 1) 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode")
+        "Gcode (Maceta Suculenta) (Plate 1) (4obj) (4x) (25431mm3) (PLA) (3h37m) "
+        "(~0.20mm Standard) (@Voron 2.4 0.4 Nozzle).gcode")
     assert d == {"base": "Maceta Suculenta", "plate": "Plate 1", "objects": 4,
                  "instances": 4, "volume_mm3": 25431, "filament_type": "PLA",
-                 "print_time": "3h37m", "process": None,
+                 "print_time": "3h37m", "process": "0.20mm Standard",
                  "preset": "Voron 2.4 0.4 Nozzle"}
-    assert d["process"] is None  # nombre sin proceso: sigue matcheando
-    # base con guiones + subcarpeta en la ruta
+    # sin proceso, base con guiones y paréntesis dentro del proceso/preset raros
     d = parse_gcode_name(
-        "sub/Gcode Trofeo - Base v2 (Plate 12) 12obj 12x 8000mm3 PLA+ 44m1s @Creality Hi.gcode")
+        "sub/Gcode (Trofeo - Base v2) (Plate 12) (12obj) (12x) (8000mm3) (PLA+) (44m1s) "
+        "(@Creality Hi).gcode")
     assert d["base"] == "Trofeo - Base v2" and d["objects"] == 12
-    # con proceso (perfil de laminado), incluso si el proceso contiene "@"
+    assert d["process"] is None
+    # proceso que contiene "@" (habitual en perfiles de Orca)
     d = parse_gcode_name(
-        "Gcode Llavero (Plate 1) 6obj 6x 9000mm3 PLA 1h2m ~0.20mm Standard @Voron @Voron 2.4 0.4 Nozzle.gcode")
+        "Gcode (Llavero) (Plate 1) (6obj) (6x) (9000mm3) (PLA) (1h2m) "
+        "(~0.20mm Standard @Voron) (@Voron 2.4 0.4 Nozzle).gcode")
     assert d["process"] == "0.20mm Standard @Voron"
     assert d["preset"] == "Voron 2.4 0.4 Nozzle"
+    # Compatibilidad: estilo previo (campos con sufijo sin paréntesis, ~/@ a pelo).
+    d = parse_gcode_name(
+        "Gcode Maceta Suculenta (Plate 1) 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode")
+    assert d["base"] == "Maceta Suculenta" and d["objects"] == 4 and d["process"] is None
     d = parse_gcode_name(
         "Gcode Llavero (Plate 1) 6obj 6x 9000mm3 PLA 1h2m ~0.16mm Detalle @Creality Hi.gcode")
     assert d["process"] == "0.16mm Detalle" and d["preset"] == "Creality Hi"

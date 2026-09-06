@@ -2903,8 +2903,8 @@ function projTypeOptions(sel) {
 }
 
 // Parseo del patrón estándar de nombre de gcode (README, convención 2026-09):
-// Gcode {base} [{plate}] {N}obj {M}x {V}mm3 {tipo} {tiempo} @{preset}.gcode
-const GCODE_NAME_RX = /^Gcode (.+?) \[(.*?)\] (\d+)obj (\d+)x (\d+)mm3 ([A-Za-z0-9+\-]+) ((?:\d+[dhms])+) @(.+)\.gcode$/;
+// Gcode {base} ({plate}) {N}obj {M}x {V}mm3 {tipo} {tiempo} @{preset}.gcode
+const GCODE_NAME_RX = /^Gcode (.+?) \((.*?)\) (\d+)obj (\d+)x (\d+)mm3 ([A-Za-z0-9+\-]+) ((?:\d+[dhms])+) @(.+)\.gcode$/;
 function parseGcodeName(filename) {
   const m = GCODE_NAME_RX.exec(String(filename || "").split("/").pop());
   if (!m) return null;

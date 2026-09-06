@@ -435,7 +435,7 @@ Orca pueden compartir extensión `.3mf`):
 
 | Prefijo     | Tipo                        | Ejemplo |
 |-------------|-----------------------------|---------|
-| `Gcode `    | gcode listo para imprimir   | `Gcode Maceta Suculenta [Plate 1] 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode` |
+| `Gcode `    | gcode listo para imprimir   | `Gcode Maceta Suculenta (Plate 1) 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode` |
 | `Modelo - ` | modelo (STL/STEP/3MF)       | `Modelo - Maceta Suculenta.stl` |
 | `OSpj - `   | proyecto de OrcaSlicer      | `OSpj - Maceta Suculenta.3mf` |
 
@@ -443,11 +443,12 @@ Plantilla de nombre de salida en OrcaSlicer (sin ambigüedad, cada campo se
 autoidentifica por su delimitador/sufijo):
 
 ```
-Gcode {input_filename_base} [{plate_name}] {num_objects}obj {num_instances}x {int(extruded_volume_total)}mm3 {filament_type[0]} {print_time} @{printer_preset}.gcode
+Gcode {input_filename_base} ({plate_name}) {num_objects}obj {num_instances}x {int(extruded_volume_total)}mm3 {filament_type[0]} {print_time} @{printer_preset}.gcode
 ```
 
 (Orca **no** añade la extensión por sí solo: el `.gcode` va dentro de la
-plantilla.)
+plantilla. Y la placa va entre **paréntesis**, nunca corchetes — `[...]` es la
+sintaxis legacy de variables de Orca y rompe la plantilla.)
 
 La plataforma podrá parsear este patrón para, p. ej., precargar `cama ÷ N` con
 `num_objects` al agregar el gcode a un proyecto. Los gcodes con el patrón viejo

@@ -256,13 +256,13 @@ def test_piezas_por_cama_divide(env):
 def test_parse_gcode_name():
     from app.services.gcode_name import parse_gcode_name
     d = parse_gcode_name(
-        "Gcode Maceta Suculenta [Plate 1] 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode")
+        "Gcode Maceta Suculenta (Plate 1) 4obj 4x 25431mm3 PLA 3h37m @Voron 2.4 0.4 Nozzle.gcode")
     assert d == {"base": "Maceta Suculenta", "plate": "Plate 1", "objects": 4,
                  "instances": 4, "volume_mm3": 25431, "filament_type": "PLA",
                  "print_time": "3h37m", "preset": "Voron 2.4 0.4 Nozzle"}
     # base con guiones + subcarpeta en la ruta
     d = parse_gcode_name(
-        "sub/Gcode Trofeo - Base v2 [Plate 12] 12obj 12x 8000mm3 PLA+ 44m1s @Creality Hi.gcode")
+        "sub/Gcode Trofeo - Base v2 (Plate 12) 12obj 12x 8000mm3 PLA+ 44m1s @Creality Hi.gcode")
     assert d["base"] == "Trofeo - Base v2" and d["objects"] == 12
     # patrón viejo (plate y objetos pegados) y nombres libres → None
     assert parse_gcode_name(
@@ -278,7 +278,7 @@ def test_add_job_precarga_piezas_por_cama(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'jb.db'}")
     Base.metadata.create_all(engine)
     Local = sessionmaker(bind=engine)
-    fname = "Gcode Llavero [Plate 1] 6obj 6x 9000mm3 PLA 1h2m @Voron.gcode"
+    fname = "Gcode Llavero (Plate 1) 6obj 6x 9000mm3 PLA 1h2m @Voron.gcode"
     with Local() as s:
         s.add(Printer(id=1, name="A", host="1"))
         s.add(PrintJob(id=9, printer_id=1, moonraker_job_id="1", filename=fname,

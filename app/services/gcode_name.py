@@ -2,7 +2,10 @@
 
 Convención documentada en el README ("Convención de nombres de archivo"):
 
-    Gcode {base} [{plate}] {N}obj {M}x {V}mm3 {tipo} {tiempo} @{preset}.gcode
+    Gcode {base} ({plate}) {N}obj {M}x {V}mm3 {tipo} {tiempo} @{preset}.gcode
+
+La placa va entre paréntesis (no corchetes: "[...]" es sintaxis legacy de
+variables en Orca y rompe la plantilla).
 
 Cada campo se autoidentifica por su delimitador/sufijo, así que el parseo es
 inequívoco. Los gcodes con nombres anteriores simplemente no matchean y se
@@ -14,7 +17,7 @@ import re
 
 GCODE_NAME_RX = re.compile(
     r"^Gcode (?P<base>.+?) "
-    r"\[(?P<plate>.*?)\] "
+    r"\((?P<plate>.*?)\) "
     r"(?P<objects>\d+)obj (?P<instances>\d+)x "
     r"(?P<volume_mm3>\d+)mm3 "
     r"(?P<filament_type>[A-Za-z0-9+\-]+) "

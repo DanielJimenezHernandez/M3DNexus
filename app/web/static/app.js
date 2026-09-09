@@ -3935,6 +3935,24 @@ function wireGcodeBar(item) {
 }
 
 // --- Alta y borrado de ítems -------------------------------------------------
+// Botones ↑/↓ para reordenar la tarjeta dentro de su lista: el PDF imprime
+// los ítems en el orden de pantalla, así que mover la tarjeta ya lo reordena.
+function reorderButtons(item, onChange) {
+  const wrap = el(`<span class="q-move">
+    <button type="button" class="btn ghost small q-up" title="Subir en la cotización">↑</button>
+    <button type="button" class="btn ghost small q-down" title="Bajar en la cotización">↓</button>
+  </span>`);
+  wrap.querySelector(".q-up").addEventListener("click", () => {
+    const prev = item.previousElementSibling;
+    if (prev) { item.parentElement.insertBefore(item, prev); onChange(); }
+  });
+  wrap.querySelector(".q-down").addEventListener("click", () => {
+    const next = item.nextElementSibling;
+    if (next) { item.parentElement.insertBefore(next, item); onChange(); }
+  });
+  return wrap;
+}
+
 function addItem() {
   const fields = ITEM_FIELDS.map(([f, label, step, def]) =>
     `<label class="field"><span>${label}</span>
@@ -3995,6 +4013,7 @@ function addItem() {
   item.querySelectorAll("input[data-f]").forEach((i) => i.addEventListener("input", recalcQuote));
   item.querySelector(".q-qty2").addEventListener("input", recalcQuote);
   item.querySelector(".q-remove").addEventListener("click", () => { item.remove(); recalcQuote(); });
+  item.querySelector(".q-remove").before(reorderButtons(item, recalcQuote));
 
   setItemThumb(item, null);
   itemsHost().appendChild(item);
@@ -4072,6 +4091,7 @@ function addVentaItem() {
   item.querySelectorAll(".v-desc, .v-price, .v-qty").forEach((i) =>
     i.addEventListener("input", recalcVenta));
   item.querySelector(".v-remove").addEventListener("click", () => { item.remove(); recalcVenta(); });
+  item.querySelector(".v-remove").before(reorderButtons(item, recalcVenta));
 }
 document.getElementById("v-add-item").addEventListener("click", addVentaItem);
 ["v-envio", "v-iva"].forEach((id) =>

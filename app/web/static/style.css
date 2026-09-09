@@ -151,6 +151,10 @@ textarea { resize: vertical; font-family: inherit; }
 #cotiz-bar .bar-detail { font-size: 0.8rem; }
 #cotiz-bar .q-fold-wrap { display: flex; align-items: center; gap: 0.4rem;
   font-size: 0.85rem; color: var(--muted); cursor: pointer; user-select: none; }
+/* Reordenar ítems de cotización: el PDF sale en el orden de pantalla. */
+.q-move { display: inline-flex; gap: 0.25rem; }
+.q-move .btn { padding: 0.15rem 0.55rem; }
+.venta-item .q-move { align-self: flex-start; }
 /* Hueco para que la barra no tape la última tarjeta al llegar al final. */
 #cotizacion { padding-bottom: 5rem; }
 

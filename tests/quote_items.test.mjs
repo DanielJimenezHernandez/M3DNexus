@@ -173,6 +173,22 @@ await t("una fila por ítem, numeradas", () => {
   assert.ok(printedHtml.includes("1. soporte.gcode"), "falta el ítem 1");
   assert.ok(printedHtml.includes("2. tapa.gcode"), "falta el ítem 2");
 });
+await t("reordenar con ↑/↓ cambia el orden del PDF", () => {
+  // Tras el test anterior hay: 1. soporte.gcode, 2. tapa.gcode
+  const tapa = items()[1];
+  tapa.querySelector(".q-up").click();
+  doc.getElementById("print-quote").click();
+  assert.ok(printedHtml.includes("1. tapa.gcode"), "tapa debería ir primero");
+  assert.ok(printedHtml.includes("2. soporte.gcode"), "soporte debería ir segundo");
+  // ↓ lo devuelve a su sitio
+  tapa.querySelector(".q-down").click();
+  doc.getElementById("print-quote").click();
+  assert.ok(printedHtml.includes("1. soporte.gcode"));
+  // ↑ en el primero no hace nada (no revienta)
+  items()[0].querySelector(".q-up").click();
+  doc.getElementById("print-quote").click();
+  assert.ok(printedHtml.includes("1. soporte.gcode"));
+});
 await t("sin miniaturas no se cuela una columna vacía", () =>
   assert.ok(!printedHtml.includes('class="thumb"')));
 await t("con miniatura aparece la columna", () => {

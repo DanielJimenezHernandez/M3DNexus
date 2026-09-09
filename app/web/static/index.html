@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — gestión de impresión 3D</title>
-  <link rel="stylesheet" href="/style.css?v=105" />
+  <link rel="stylesheet" href="/style.css?v=111" />
 </head>
 <body>
   <!-- Panel lateral colapsable. Los botones conservan data-tab: es la clave que
@@ -278,6 +278,9 @@
         <div class="inner">
           <div class="q-total"></div>
           <span class="spacer"></span>
+          <label class="q-fold-wrap" title="El costo de servicio y operario ya va repartido en el precio de cada ítem; el PDF solo muestra Sub-Total, envío, IVA y Total">
+            <input type="checkbox" id="q-fold-servicio" checked> Sin desglose en el PDF
+          </label>
           <button class="btn" id="print-quote">Imprimir PDF</button>
         </div>
       </div>
@@ -330,6 +333,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=110"></script>
+  <script src="/app.js?v=111"></script>
 </body>
 </html>

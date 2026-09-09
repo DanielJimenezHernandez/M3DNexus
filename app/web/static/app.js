@@ -4027,6 +4027,8 @@ document.querySelectorAll("#cotiz-mode button").forEach((b) =>
       x.classList.toggle("active", x === b));
     document.getElementById("quote-mode").hidden = cotizMode !== "quote";
     document.getElementById("venta-mode").hidden = cotizMode !== "venta";
+    // El checkbox de desglose solo aplica al modo cotización (venta ya es plana).
+    document.querySelector(".q-fold-wrap").hidden = cotizMode !== "quote";
     if (cotizMode === "venta") {
       if (!document.querySelector("#venta-items .venta-item")) addVentaItem();
       recalcVenta();
@@ -4153,6 +4155,10 @@ function printCotiz() {
   const q = quoteTotals();
   const s = appSettings || {};
   const cliente = document.getElementById("q-cliente").value;
+  // Sin desglose: el servicio y operario ya viajan dentro del precio unitario
+  // de cada ítem (calcItem los suma a la pieza), así que basta con no
+  // enseñar las filas informativas — las líneas ya suman el Sub-Total.
+  const fold = document.getElementById("q-fold-servicio").checked;
   const qnum = "Q-" + Math.random().toString(16).slice(2, 8).toUpperCase();
   // La columna de miniaturas solo aparece si algún ítem tiene: una columna
   // vacía en todas las filas queda peor que no tenerla.
@@ -4186,8 +4192,9 @@ function printCotiz() {
       ${filas}
     </table>
     <table class="totals">
+      ${fold ? "" : `
       <tr><td>Costo de material</td><td class="num">${money(q.materialTotal)}</td></tr>
-      <tr><td>Servicio y operario</td><td class="num">${money(q.servicioTotal)}</td></tr>
+      <tr><td>Servicio y operario</td><td class="num">${money(q.servicioTotal)}</td></tr>`}
       <tr><td>Sub-Total</td><td class="num">${money(q.subtotal)}</td></tr>
       <tr><td>Servicio de envío</td><td class="num">${money(q.envio)}</td></tr>
       <tr><td>IVA (${q.ivaPct}%)</td><td class="num">${money(q.iva)}</td></tr>

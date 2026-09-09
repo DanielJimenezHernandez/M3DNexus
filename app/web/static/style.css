@@ -149,6 +149,8 @@ textarea { resize: vertical; font-family: inherit; }
   flex-wrap: wrap; max-width: 1200px; margin: 0 auto; }
 #cotiz-bar .bar-total { font-size: 1.3rem; font-weight: 700; color: var(--good); }
 #cotiz-bar .bar-detail { font-size: 0.8rem; }
+#cotiz-bar .q-fold-wrap { display: flex; align-items: center; gap: 0.4rem;
+  font-size: 0.85rem; color: var(--muted); cursor: pointer; user-select: none; }
 /* Hueco para que la barra no tape la última tarjeta al llegar al final. */
 #cotizacion { padding-bottom: 5rem; }
 

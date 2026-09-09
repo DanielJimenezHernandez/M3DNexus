@@ -190,6 +190,21 @@ await t("el cliente sale si se rellena", () => {
   doc.getElementById("print-quote").click();
   assert.ok(printedHtml.includes("ACME S.A."));
 });
+await t("sin desglose por defecto: solo Sub-Total/envío/IVA/Total", () => {
+  assert.ok(doc.getElementById("q-fold-servicio").checked, "debería arrancar marcado");
+  doc.getElementById("print-quote").click();
+  assert.ok(!printedHtml.includes("Servicio y operario"), "sobró el desglose");
+  assert.ok(!printedHtml.includes("Costo de material"), "sobró el desglose");
+  assert.ok(printedHtml.includes("Sub-Total"), "falta el Sub-Total");
+  assert.ok(printedHtml.includes("Servicio de envío"), "falta el envío");
+});
+await t("desmarcado vuelve el desglose", () => {
+  doc.getElementById("q-fold-servicio").checked = false;
+  doc.getElementById("print-quote").click();
+  assert.ok(printedHtml.includes("Servicio y operario"));
+  assert.ok(printedHtml.includes("Costo de material"));
+  doc.getElementById("q-fold-servicio").checked = true;
+});
 await t("sin ítems no imprime", () => {
   items().forEach((i) => i.querySelector(".q-remove").click());
   printedHtml = null;

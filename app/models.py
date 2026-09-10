@@ -492,6 +492,11 @@ class Setting(Base):
 # Claves de Setting conocidas.
 SETTING_ELECTRICITY_PRICE = "electricity_price_per_kwh"
 SETTING_CURRENCY = "currency"
+# Multiplicador del coste de luz por impresión: cubre la operación eléctrica
+# no atribuida (standby de las máquinas, PC de laminado…). Medido en el taller:
+# el consumo total es ~2–2.5× el de las impresoras trabajando solas. Multiplica
+# SOLO el coste, nunca el kWh medido. 1 = desactivado.
+SETTING_ENERGY_OVERHEAD = "energy_overhead_factor"
 # Momento (ISO) a partir del cual se auto-crean filamentos nuevos. Las
 # impresiones terminadas antes de esta marca no auto-crean (evita llenar la BD
 # con el back-catálogo).

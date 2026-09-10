@@ -27,6 +27,7 @@ from .services.ingest import (
     _borrow_energy,
     _filament_weight,
     apply_costs,
+    get_energy_factor,
     get_settings,
 )
 
@@ -38,6 +39,7 @@ def main() -> int:
 
     with session_scope() as session:
         price, currency = get_settings(session)
+        factor = get_energy_factor(session)
         printers = {p.id: p for p in session.scalars(select(Printer)).all()}
         jobs = session.scalars(select(PrintJob)).all()
 
@@ -72,7 +74,8 @@ def main() -> int:
             # Impresoras sin sensor propio que referencian a otra: estima la luz
             # que faltara desde su histórico. No pisa energía ya medida.
             _borrow_energy(session, rec, printer, material)
-            apply_costs(rec, printer, material, price, currency)
+            apply_costs(rec, printer, material, price, currency,
+                        energy_factor=factor)
 
             weight_after += new_weight
             cost_after += rec.cost_total or 0.0

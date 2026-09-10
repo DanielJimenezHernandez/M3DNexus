@@ -32,6 +32,7 @@ from ..models import (
     SETTING_COMPANY_NAME,
     SETTING_CURRENCY,
     SETTING_ELECTRICITY_PRICE,
+    SETTING_ENERGY_OVERHEAD,
     SETTING_ORDERS_FOLDER_BASE,
     SETTING_PAYMENT_INFO,
     SETTING_QUOTE_TERMS,
@@ -72,7 +73,12 @@ from ..services.filament import (
     parse_filament,
 )
 from ..services.gcode_name import parse_gcode_name
-from ..services.ingest import _borrow_energy, apply_costs, get_settings
+from ..services.ingest import (
+    _borrow_energy,
+    apply_costs,
+    get_energy_factor,
+    get_settings,
+)
 from ..services.loaded import resolve_slots, set_slots
 from ..services.orca_import import apply_import, plan_import
 from ..services.projects import avg_price_per_type, resolve_project
@@ -315,7 +321,8 @@ def _recompute_material_jobs(db: Session, material: Material) -> int:
     for job in jobs:
         printer = printers.get(job.printer_id)
         if printer:
-            apply_costs(job, printer, material, price, currency)
+            apply_costs(job, printer, material, price, currency,
+                        energy_factor=get_energy_factor(db))
     return len(jobs)
 
 
@@ -354,7 +361,8 @@ def delete_material(material_id: int, db: Session = Depends(get_session)):
         job.material_id = None
         printer = printers.get(job.printer_id)
         if printer:
-            apply_costs(job, printer, None, price, currency)
+            apply_costs(job, printer, None, price, currency,
+                        energy_factor=get_energy_factor(db))
 
     for cal in db.scalars(
         select(FilamentCalibration).where(
@@ -588,7 +596,8 @@ def _recompute(db: Session, job: PrintJob) -> None:
     material = db.get(Material, job.material_id) if job.material_id else None
     if printer is not None:
         _borrow_energy(db, job, printer, material)
-    apply_costs(job, printer, material, price, currency)
+    apply_costs(job, printer, material, price, currency,
+                energy_factor=get_energy_factor(db))
 
 
 @router.post("/jobs/{job_id}/assign-material", response_model=JobOut)
@@ -1360,6 +1369,7 @@ def _settings_out(db: Session) -> SettingsOut:
     price, currency = get_settings(db)
     return SettingsOut(
         electricity_price_per_kwh=price,
+        energy_overhead_factor=get_energy_factor(db),
         currency=currency,
         company_name=_get_setting(db, SETTING_COMPANY_NAME),
         company_logo=_get_setting(db, SETTING_COMPANY_LOGO),
@@ -1387,6 +1397,8 @@ def _set_setting(db: Session, key: str, value: str) -> None:
 def update_settings(data: SettingsIn, db: Session = Depends(get_session)):
     if data.electricity_price_per_kwh is not None:
         _set_setting(db, SETTING_ELECTRICITY_PRICE, str(data.electricity_price_per_kwh))
+    if data.energy_overhead_factor is not None:
+        _set_setting(db, SETTING_ENERGY_OVERHEAD, str(data.energy_overhead_factor))
     if data.currency is not None:
         _set_setting(db, SETTING_CURRENCY, data.currency)
     if data.company_name is not None:

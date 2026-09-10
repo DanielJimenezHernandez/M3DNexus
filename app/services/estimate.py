@@ -16,7 +16,7 @@ from ..cost import DEFAULT_FILAMENT_DENSITY, CostInputs, compute_cost, mm_to_gra
 from ..integrations.moonraker import MoonrakerClient, thumbnail_path
 from ..models import Material, PrintJob, Printer
 from .filament import resolve_or_create_material
-from .ingest import get_settings
+from .ingest import get_energy_factor, get_settings
 
 # Potencia media por defecto (W) cuando no hay historial del que derivarla.
 FALLBACK_AVG_POWER_W = 100.0
@@ -183,6 +183,9 @@ def _estimate_from_meta(
         CostInputs(
             energy_kwh=energy_kwh,
             electricity_price_per_kwh=price,
+            # Mismo recargo de operación que cobra la ingesta: la estimación
+            # debe prever el coste que de verdad se registrará.
+            energy_overhead_factor=get_energy_factor(session),
             filament_weight_g=weight_g,
             filament_price_per_kg=material.price_per_kg if material else 0.0,
             print_duration_hours=hours,
@@ -253,6 +256,9 @@ def fleet_cost_per_hour(
         return None
 
     hours = _machine_hours(session) if weighting == "usage" else {}
+    # El recargo de operación eléctrica también aplica a la luz/h de flota:
+    # es el mismo coste que registrará la ingesta.
+    energy_factor = get_energy_factor(session)
     machines = []
     weights = []   # pesos SIN redondear, para no distorsionar el promedio
     for p in printers:
@@ -262,7 +268,7 @@ def fleet_cost_per_hour(
         if not p.ha_energy_entity and p.power_ref_printer_id:
             power_pid = p.power_ref_printer_id
         power, src = avg_power_w(session, power_pid, material_type)
-        elec = power / 1000.0 * price_per_kwh
+        elec = power / 1000.0 * price_per_kwh * energy_factor
         mach = p.machine_per_hour
         raw_w = hours.get(p.id, 0.0) if weighting == "usage" else 1.0
         weights.append(raw_w)

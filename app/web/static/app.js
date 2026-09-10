@@ -4230,6 +4230,7 @@ async function loadSettings() {
   const s = await api.get("/api/settings");
   appSettings = s; currency = s.currency;
   document.getElementById("set-price").value = s.electricity_price_per_kwh;
+  document.getElementById("set-energy-factor").value = s.energy_overhead_factor ?? 1;
   document.getElementById("set-currency").value = s.currency;
   document.getElementById("set-company-name").value = s.company_name || "";
   document.getElementById("set-company-info").value = s.company_info || "";
@@ -4275,6 +4276,8 @@ document.getElementById("save-settings").addEventListener("click", async () => {
   try {
     appSettings = await api.send("/api/settings", "PUT", {
       electricity_price_per_kwh: parseFloat(document.getElementById("set-price").value) || 0,
+      // || 1 y no || 0: borrar el campo no debe dejar la luz gratis ni a cero.
+      energy_overhead_factor: parseFloat(document.getElementById("set-energy-factor").value) || 1,
       currency: document.getElementById("set-currency").value || "€",
       company_name: document.getElementById("set-company-name").value,
       company_logo: logoDataUri,

@@ -29,6 +29,7 @@ from ..models import (
     SETTING_AUTOCREATE_SINCE,
     SETTING_CURRENCY,
     SETTING_ELECTRICITY_PRICE,
+    SETTING_ENERGY_OVERHEAD,
     Material,
     PrintJob,
     Printer,
@@ -48,6 +49,20 @@ def get_settings(session: Session) -> tuple[float, str]:
     price = float(rows.get(SETTING_ELECTRICITY_PRICE, "0") or 0)
     currency = rows.get(SETTING_CURRENCY, "€") or "€"
     return price, currency
+
+
+def get_energy_factor(session: Session) -> float:
+    """Multiplicador de operación eléctrica (1.0 si no está configurado).
+
+    En BDs existentes la migración lo siembra en 2 (medición del taller);
+    se edita en Ajustes. Multiplica solo el coste de luz, no el kWh.
+    """
+    row = session.get(Setting, SETTING_ENERGY_OVERHEAD)
+    try:
+        val = float(row.value) if row and row.value else 1.0
+    except ValueError:
+        return 1.0
+    return max(0.0, val)
 
 
 def get_autocreate_since(session: Session) -> datetime | None:
@@ -189,6 +204,7 @@ def apply_costs(
     material: Material | None,
     price_per_kwh: float,
     currency: str,
+    energy_factor: float = 1.0,
 ) -> None:
     """Rellena los campos de coste del registro a partir de su estado actual.
 
@@ -201,6 +217,7 @@ def apply_costs(
         CostInputs(
             energy_kwh=record.energy_kwh or 0.0,
             electricity_price_per_kwh=price_per_kwh,
+            energy_overhead_factor=energy_factor,
             # La purga de cambio de color (multimaterial) es filamento gastado
             # que el slicer no cuenta: se suma al peso cobrado.
             filament_weight_g=(record.filament_weight_g or 0.0)
@@ -309,6 +326,7 @@ def ingest_job(
     # potencia media de esa (misma clase de máquina). Mejor que cobrar $0.
     _borrow_energy(session, record, printer, material)
 
-    apply_costs(record, printer, material, price_per_kwh, currency)
+    apply_costs(record, printer, material, price_per_kwh, currency,
+                energy_factor=get_energy_factor(session))
     session.flush()
     return record

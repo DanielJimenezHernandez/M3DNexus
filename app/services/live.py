@@ -23,7 +23,7 @@ from ..db import session_scope
 from ..integrations.moonraker import MoonrakerClient, thumbnail_path
 from ..models import Printer
 from .filament import resolve_or_create_material
-from .ingest import get_settings
+from .ingest import get_energy_factor, get_settings
 from .sync import _ha_client
 
 log = logging.getLogger(__name__)
@@ -69,6 +69,7 @@ class LiveTracker:
 
         with session_scope() as session:
             price, currency = get_settings(session)
+            energy_factor = get_energy_factor(session)
             printers = session.query(Printer).filter_by(enabled=True).all()
 
             for p in printers:
@@ -124,6 +125,7 @@ class LiveTracker:
                     CostInputs(
                         energy_kwh=energy or 0.0,
                         electricity_price_per_kwh=price,
+                        energy_overhead_factor=energy_factor,
                         filament_weight_g=weight_g,
                         filament_price_per_kg=material.price_per_kg if material else 0.0,
                         print_duration_hours=print_duration / 3600.0,

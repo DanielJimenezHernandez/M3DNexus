@@ -35,7 +35,7 @@ Para cada job terminado (completado **o** fallado):
 
 | Componente     | Fórmula |
 |----------------|---------|
-| Electricidad   | `kWh de la impresión × precio/kWh` |
+| Electricidad   | `kWh de la impresión × precio/kWh × factor de operación` |
 | Filamento      | `gramos × precio/kg del material` |
 | Amortización   | `horas × ((precio máquina − reventa) / vida útil en horas)` |
 | Mantenimiento  | `horas × coste/hora de la impresora` |
@@ -43,6 +43,16 @@ Para cada job terminado (completado **o** fallado):
 - **kWh de la impresión** = `energía_acumulada(fin) − energía_acumulada(inicio)`
   del sensor POW3 en HA. Mide el consumo real de toda la impresora (calentar
   cama/hotend incluido).
+- **Factor de operación eléctrica** (`energy_overhead_factor`, editable en
+  *Ajustes*, sembrado en ×2): recarga el coste de luz para cubrir el consumo
+  eléctrico **no atribuido** a impresiones — standby de las máquinas (~22%
+  medido) y la PC de laminado encendida el día entero. Medición del taller: el
+  consumo total es ≈2–2.5× el de las impresoras imprimiendo a solas. Multiplica
+  **solo el coste**, nunca el `energy_kwh` registrado (ese sigue siendo el
+  medido); aplica igual en ingesta, tiempo real, estimación, flota y proyectos.
+  Con 1 queda desactivado. Los jobs ya registrados conservan su coste; para
+  recalcular el histórico con el factor: `docker exec printcost python -m
+  app.recompute`.
 - **Amortización con reventa**: solo se deprecia lo que de verdad pierdes
   (`precio − valor de reventa estimado`), repartido entre la vida útil
   (`años × días activos/año × horas/día`). Una máquina que conserva valor no
@@ -411,6 +421,12 @@ Detectados en la revisión del **2026-07-22** contra la BD en producción
   tabla fija en `services/estimate.py`).
 - [ ] Aplicar el **factor de calibración** de un proyecto (báscula ÷ estimado)
   a las estimaciones futuras de esos gcodes.
+- [ ] **Tarifa de operación eléctrica por hora** (opción B, sustituto fino del
+  multiplicador actual): medir una semana el taller completo (Kill-A-Watt),
+  restar los kWh ya atribuidos a impresiones y repartir el residuo (standby +
+  PC de laminado) como $/h de impresión — mismo mecanismo que el mantenimiento
+  por hora. Se auto-recalibraría con los sensores (leer el total diario del
+  POW3 y restar lo atribuido). Mientras tanto: `energy_overhead_factor`.
 
 ## Visión a futuro — local-first + catálogo de productos
 

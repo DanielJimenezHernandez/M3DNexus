@@ -40,6 +40,10 @@ class CostInputs:
 
     energy_kwh: float = 0.0
     electricity_price_per_kwh: float = 0.0
+    # Multiplicador de operación eléctrica: cubre el consumo no atribuido a la
+    # impresión (standby, PC de laminado…). Multiplica el COSTE de luz, nunca
+    # el kWh medido. 1 = sin recargo.
+    energy_overhead_factor: float = 1.0
 
     filament_weight_g: float = 0.0
     filament_price_per_kg: float = 0.0
@@ -76,7 +80,8 @@ def compute_cost(inp: CostInputs) -> CostBreakdown:
     canceló a medias, ``energy_kwh`` y ``filament_weight_g`` reflejan lo
     consumido hasta ese punto, así que el coste sigue siendo correcto.
     """
-    energy = inp.energy_kwh * inp.electricity_price_per_kwh
+    energy = (inp.energy_kwh * inp.electricity_price_per_kwh
+              * max(0.0, inp.energy_overhead_factor))
     filament = (inp.filament_weight_g / 1000.0) * inp.filament_price_per_kg
 
     depreciation = 0.0

@@ -117,6 +117,14 @@ def _migrate() -> None:
                     conn.exec_driver_sql(ddl)
                     added.add(col)
 
+        # Siembra el factor de operación eléctrica en ×2 SOLO en BDs existentes
+        # (medición del taller: consumo real ≈ 2–2.5× el de imprimir a solas).
+        # En código el defecto es 1.0 (neutral); el usuario lo ajusta en Ajustes.
+        conn.exec_driver_sql(
+            "INSERT OR IGNORE INTO settings (key, value) "
+            "VALUES ('energy_overhead_factor', '2')"
+        )
+
         # Migra y elimina la columna antigua 'moonraker_url': su NOT NULL rompía
         # los INSERT nuevos (el modelo ya no la rellena). Idempotente.
         pcols = {

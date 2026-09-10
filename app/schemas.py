@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class PrinterIn(BaseModel):
@@ -137,6 +137,8 @@ LOGO_DATA_URI = re.compile(
 
 class SettingsOut(BaseModel):
     electricity_price_per_kwh: float
+    # Multiplicador de operación eléctrica (standby + PC…); 1 = desactivado.
+    energy_overhead_factor: float = 1.0
     currency: str
     company_name: str = ""
     company_logo: str = ""
@@ -148,6 +150,7 @@ class SettingsOut(BaseModel):
 
 class SettingsIn(BaseModel):
     electricity_price_per_kwh: float | None = None
+    energy_overhead_factor: float | None = Field(default=None, ge=0)
     currency: str | None = None
     company_name: str | None = None
     company_logo: str | None = None

@@ -4150,7 +4150,7 @@ function printVenta() {
       <span><strong>Cotización #:</strong> ${qnum}</span>
       ${cliente ? `<span><strong>Cliente:</strong> ${escHtml(cliente)}</span>` : ""}
       <span><strong>Fecha:</strong> ${new Date().toLocaleDateString()}</span>
-      <span><strong>Piezas:</strong> ${v.lines.reduce((a, l) => a + l.qty, 0)}</span>
+      <span><strong>Piezas o servicio:</strong> ${v.lines.reduce((a, l) => a + l.qty, 0)}</span>
     </div>
     <table>
       <tr>${conThumb ? "<th></th>" : ""}<th>Descripción</th>

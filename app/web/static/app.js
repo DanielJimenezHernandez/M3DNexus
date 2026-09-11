@@ -4070,6 +4070,8 @@ function addVentaItem() {
           <label class="field"><span>Precio de venta (c/u)</span><input type="number" step="0.01" min="0" class="v-price" value="0"></label>
           <label class="field"><span>Cantidad</span><input type="number" min="1" class="v-qty" value="1"></label>
         </div>
+        <label class="field"><span>Descripción (sale en el PDF, bajo el nombre)</span>
+          <textarea class="v-detail" rows="2" placeholder="Detalle para el cliente: qué incluye, material, medidas, alcance del servicio…"></textarea></label>
         <div class="muted v-line"></div>
       </div>
       <button type="button" class="btn danger small v-remove">Quitar</button>
@@ -4101,7 +4103,9 @@ function ventaTotals() {
   const lines = ventaItems().map((item) => {
     const price = parseFloat(item.querySelector(".v-price").value) || 0;
     const qty = Math.max(1, parseInt(item.querySelector(".v-qty").value) || 1);
-    return { item, desc: item.querySelector(".v-desc").value, price, qty, total: price * qty };
+    return { item, desc: item.querySelector(".v-desc").value,
+             detail: item.querySelector(".v-detail").value.trim(),
+             price, qty, total: price * qty };
   }).filter((l) => l.desc || l.price);
   const subtotal = lines.reduce((a, l) => a + l.total, 0);
   const envio = parseFloat(document.getElementById("v-envio").value) || 0;
@@ -4138,7 +4142,8 @@ function printVenta() {
   const conThumb = v.lines.some((l) => l.item._thumb);
   const filas = v.lines.map((l, i) => `<tr>
       ${conThumb ? `<td class="thumb">${l.item._thumb ? `<img src="${escHtml(l.item._thumb)}" alt="">` : ""}</td>` : ""}
-      <td>${i + 1}. ${escHtml(l.desc || "Producto")}</td>
+      <td>${i + 1}. ${escHtml(l.desc || "Producto")}${l.detail
+        ? `<div style="font-size:0.85em;color:#555;margin-top:2px">${escHtml(l.detail).replace(/\n/g, "<br>")}</div>` : ""}</td>
       <td class="num">${money(l.price)}</td>
       <td class="num">${l.qty}</td>
       <td class="num">${money(l.total)}</td>
@@ -4150,7 +4155,7 @@ function printVenta() {
       <span><strong>Cotización #:</strong> ${qnum}</span>
       ${cliente ? `<span><strong>Cliente:</strong> ${escHtml(cliente)}</span>` : ""}
       <span><strong>Fecha:</strong> ${new Date().toLocaleDateString()}</span>
-      <span><strong>Piezas o servicio:</strong> ${v.lines.reduce((a, l) => a + l.qty, 0)}</span>
+      <span><strong>Piezas/Servicios:</strong> ${v.lines.reduce((a, l) => a + l.qty, 0)}</span>
     </div>
     <table>
       <tr>${conThumb ? "<th></th>" : ""}<th>Descripción</th>

@@ -1049,6 +1049,70 @@ def orders_queue(db: Session = Depends(get_session)):
     return list(queue.values())
 
 
+@router.get("/orders/monthly")
+def orders_monthly(db: Session = Depends(get_session)):
+    """Resumen contable: pedidos entrados y monto por mes (por ``created_at``).
+
+    Los cancelados se cuentan aparte y no suman al monto; los pedidos sin
+    precio acordado cuentan como entrados pero se reportan para revisarlos.
+    """
+    _, currency = get_settings(db)
+    months: dict[str, dict] = {}
+    for o in db.scalars(select(Order)).unique().all():
+        key = o.created_at.strftime("%Y-%m") if o.created_at else "sin-fecha"
+        m = months.setdefault(key, {
+            "month": key, "orders": 0, "total": 0.0,
+            "delivered": 0, "cancelled": 0, "sin_precio": 0,
+        })
+        if o.manual_status == "cancelled":
+            m["cancelled"] += 1
+            continue
+        m["orders"] += 1
+        if o.agreed_price:
+            m["total"] += o.agreed_price
+        else:
+            m["sin_precio"] += 1
+        if o.manual_status == "delivered":
+            m["delivered"] += 1
+    out = sorted(months.values(), key=lambda x: x["month"], reverse=True)
+    for m in out:
+        m["total"] = round(m["total"], 2)
+    return {"months": out, "currency": currency}
+
+
+@router.get("/orders/monthly.csv")
+def orders_monthly_csv(db: Session = Depends(get_session)):
+    """Relación de pedidos para contabilidad: una fila por pedido, con su mes."""
+    orders = db.scalars(
+        select(Order).order_by(Order.created_at.desc())
+    ).unique().all()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["mes", "fecha_entrada", "pedido", "cliente", "descripcion",
+                "precio_acordado", "pago", "anticipo", "fecha_entrega",
+                "estado", "moneda"])
+    for o in orders:
+        estado = o.manual_status or "activo"
+        w.writerow([
+            o.created_at.strftime("%Y-%m") if o.created_at else "",
+            o.created_at.strftime("%Y-%m-%d") if o.created_at else "",
+            o.id,
+            o.client,
+            o.description or "",
+            o.agreed_price if o.agreed_price is not None else "",
+            o.payment_status,
+            o.deposit_amount if o.deposit_amount is not None else "",
+            o.due_date.strftime("%Y-%m-%d") if o.due_date else "",
+            estado,
+            o.currency,
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=m3dnexus_pedidos_mensual.csv"},
+    )
+
+
 def _apply_order(order: Order, data: OrderIn, db: Session) -> None:
     """Vuelca los campos del pedido y reemplaza sus piezas."""
     order.client = data.client

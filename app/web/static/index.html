@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — gestión de impresión 3D</title>
-  <link rel="stylesheet" href="/style.css?v=112" />
+  <link rel="stylesheet" href="/style.css?v=117" />
 </head>
 <body>
   <!-- Panel lateral colapsable. Los botones conservan data-tab: es la clave que
@@ -125,9 +125,11 @@
           <span class="spacer"></span>
           <span id="ped-summary" class="ped-summary muted"></span>
           <button class="btn ghost small" id="ped-queue-toggle">Ver cola por impresora</button>
+          <button class="btn ghost small" id="ped-monthly-toggle">Resumen mensual</button>
           <button class="btn" id="add-order">+ Nuevo pedido</button>
         </div>
         <div id="ped-queue" hidden></div>
+        <div id="ped-monthly" hidden></div>
         <div id="order-form-host"></div>
         <div id="orders-board"></div>
       </div>
@@ -341,6 +343,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=115"></script>
+  <script src="/app.js?v=117"></script>
 </body>
 </html>

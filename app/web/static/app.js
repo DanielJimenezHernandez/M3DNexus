@@ -345,7 +345,9 @@ function jobDetailHTML(j, pmap, mById) {
     ? `<img class="oi-detail-thumb" src="/api/jobs/${j.id}/thumbnail" loading="lazy" alt="">`
     : `<div class="oi-detail-thumb ph"></div>`;
   const energia = j.energy_kwh != null
-    ? `${j.energy_estimated ? "≈ " : ""}${j.energy_kwh.toFixed(3)} kWh${j.energy_estimated ? " (estimada)" : " (medida)"}`
+    ? (j.energy_fallback
+      ? `<span class="efallback">≈ ${j.energy_kwh.toFixed(3)} kWh (estimada — el sensor no tuvo datos)</span>`
+      : `${j.energy_estimated ? "≈ " : ""}${j.energy_kwh.toFixed(3)} kWh${j.energy_estimated ? " (estimada)" : " (medida)"}`)
     : "sin datos";
   const stars = Array.from({ length: 5 }, (_, i) =>
     `<span class="${i < (j.rating || 0) ? "on" : ""}" data-star="${i + 1}">★</span>`).join("");
@@ -448,7 +450,10 @@ function renderJobsTable(rows, pmap, mById) {
         <td class="muted">${fmtDate(j.end_time)}</td>
         <td class="num">${fmtDur(j.print_duration_s)}</td>
         <td class="num"${j.purge_weight_g ? ` title="${j.filament_weight_g.toFixed(0)} g del slicer + ${j.purge_weight_g} g de purga"` : ""}>${j.purge_weight_g ? `${(j.filament_weight_g + j.purge_weight_g).toFixed(0)} g <span class="muted">(+${j.purge_weight_g}p)</span>` : `${j.filament_weight_g.toFixed(0)} g`}</td>
-        <td class="num"${j.energy_estimated ? ' title="Energía estimada con la potencia media de otra impresora (no medida)"' : ""}>${j.energy_kwh != null ? (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh" : "—"}</td>
+        <td class="num"${j.energy_fallback ? ' title="Energía estimada: su propio sensor no tuvo datos (recorder de HA caído / enchufe offline)"'
+          : j.energy_estimated ? ' title="Energía estimada con la potencia media de otra impresora (no medida)"' : ""}>${j.energy_kwh != null
+          ? (j.energy_fallback ? `<span class="efallback">≈ ${j.energy_kwh.toFixed(3)} kWh</span>`
+            : (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh") : "—"}</td>
         ${(() => {
           // Solo lectura: el cambio de material vive en el detalle expandido.
           const mat = j.material_id != null ? mById[j.material_id] : null;
@@ -497,7 +502,9 @@ function renderJobsTable(rows, pmap, mById) {
       </div>
       <div class="jc-meta muted">
         ${escHtml(pmap[j.printer_id] || "")} · <span class="pill ${j.status}">${j.status}</span>${j.needs_review ? ` <span class="pill review">revisar</span>` : ""}<br>
-        ${fmtDate(j.end_time)} · ${fmtDur(j.print_duration_s)} · ${j.filament_weight_g.toFixed(0)} g · ${j.energy_kwh != null ? (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh" : "— kWh"}
+        ${fmtDate(j.end_time)} · ${fmtDur(j.print_duration_s)} · ${j.filament_weight_g.toFixed(0)} g · ${j.energy_kwh != null
+          ? (j.energy_fallback ? `<span class="efallback">≈ ${j.energy_kwh.toFixed(3)} kWh</span>`
+            : (j.energy_estimated ? "≈ " : "") + j.energy_kwh.toFixed(3) + " kWh") : "— kWh"}
       </div>
       ${j.is_multicolor
         ? `<div class="mat-multi">${(j.used_filaments || []).map((f) => `<div class="mat-multi-row">${escHtml(f.name)}${f.weight_g ? ` · ${f.weight_g} g` : ""}</div>`).join("")}</div>
@@ -2666,6 +2673,53 @@ document.getElementById("add-order").addEventListener("click", () => orderForm()
 document.getElementById("ped-filter").addEventListener("change", renderOrders);
 document.getElementById("ped-search").addEventListener("input", renderOrders);
 document.getElementById("ped-queue-toggle").addEventListener("click", toggleQueue);
+
+// Resumen contable por mes de entrada (created_at): nº de pedidos y monto
+// acordado. Cancelados aparte; el CSV lleva la relación pedido a pedido.
+async function toggleMonthly() {
+  const host = document.getElementById("ped-monthly");
+  if (!host.hidden) { host.hidden = true; return; }
+  const d = await api.get("/api/orders/monthly");
+  const mesName = (key) => {
+    if (!/^\d{4}-\d{2}$/.test(key)) return key;
+    const dt = new Date(key + "-01T12:00:00");
+    const s = dt.toLocaleDateString("es", { month: "long", year: "numeric" });
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+  const totalAll = d.months.reduce((a, m) => a + m.total, 0);
+  const pedidosAll = d.months.reduce((a, m) => a + m.orders, 0);
+  host.innerHTML = d.months.length
+    ? `<div class="card">
+        <div class="toolbar" style="margin-bottom:.4rem">
+          <strong>Pedidos y monto por mes de entrada</strong>
+          <span class="spacer"></span>
+          <a class="btn ghost small" href="/api/orders/monthly.csv">Exportar CSV (para contabilidad)</a>
+        </div>
+        <table class="monthly-table">
+          <tr><th>Mes</th><th class="num">Pedidos</th><th class="num">Entregados</th>
+              <th class="num">Monto</th><th></th></tr>
+          ${d.months.map((m) => `<tr>
+            <td>${escHtml(mesName(m.month))}</td>
+            <td class="num">${m.orders}</td>
+            <td class="num">${m.delivered}</td>
+            <td class="num"><strong>${money2(m.total, d.currency)}</strong></td>
+            <td class="muted">${[
+              m.sin_precio ? `${m.sin_precio} sin precio` : "",
+              m.cancelled ? `${m.cancelled} cancelado${m.cancelled > 1 ? "s" : ""}` : "",
+            ].filter(Boolean).join(" · ")}</td>
+          </tr>`).join("")}
+          <tr class="grand"><td><strong>Total</strong></td>
+            <td class="num"><strong>${pedidosAll}</strong></td><td></td>
+            <td class="num"><strong>${money2(totalAll, d.currency)}</strong></td><td></td></tr>
+        </table>
+        <p class="muted" style="margin:.5rem 0 0">El monto es el precio acordado de los
+          pedidos <em>entrados</em> ese mes (cancelados no suman). El CSV lleva la
+          relación pedido a pedido con fecha, cliente, pago y anticipo.</p>
+      </div>`
+    : `<p class="muted">Aún no hay pedidos.</p>`;
+  host.hidden = false;
+}
+document.getElementById("ped-monthly-toggle").addEventListener("click", toggleMonthly);
 // Refresco en vivo del tablero mientras se mira (mismo ritmo que el dashboard).
 // Refresco del tablero mientras se mira; se salta si hay un formulario de
 // edición abierto (arriba o dentro de una tarjeta), para no borrarlo al vuelo.

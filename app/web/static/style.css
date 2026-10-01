@@ -151,6 +151,13 @@ textarea { resize: vertical; font-family: inherit; }
 #cotiz-bar .bar-detail { font-size: 0.8rem; }
 #cotiz-bar .q-fold-wrap { display: flex; align-items: center; gap: 0.4rem;
   font-size: 0.85rem; color: var(--muted); cursor: pointer; user-select: none; }
+/* Energía estimada porque el sensor propio no tuvo datos (recorder caído):
+   ámbar, para distinguirla de la energía prestada (≈ sin color). */
+.efallback { color: var(--warn); }
+/* Resumen mensual de pedidos (contabilidad). */
+#ped-monthly { margin-bottom: 1rem; }
+.monthly-table { width: 100%; }
+.monthly-table tr.grand td { border-top: 2px solid var(--border); }
 /* Reordenar ítems de cotización: el PDF sale en el orden de pantalla. */
 .q-move { display: inline-flex; gap: 0.25rem; }
 .q-move .btn { padding: 0.15rem 0.55rem; }

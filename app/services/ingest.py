@@ -167,19 +167,33 @@ def _borrow_energy(
     printer: Printer,
     material: Material | None,
 ) -> None:
-    """Estima la energía tomando la potencia media de otra impresora.
+    """Estima la energía cuando no hay medida, en dos escenarios.
 
-    Para máquinas sin sensor propio (``ha_energy_entity`` vacío) pero con una
-    ``power_ref_printer_id``: se estima energía = potencia_media(referencia) ×
-    duración, y se marca el job como ``energy_estimated`` para no confundirlo con
-    una medida real. Solo actúa si aún no hay energía (medida o estimada).
+    1. Máquina SIN sensor propio pero con ``power_ref_printer_id``: energía =
+       potencia_media(referencia) × duración (``energy_estimated``).
+    2. Máquina CON sensor propio cuya ventana quedó sin datos usables
+       (``energy_unavailable``: recorder de HA caído, enchufe offline durante
+       la impresión): energía = potencia_media(ella misma, con fallbacks) ×
+       duración, marcada además ``energy_fallback`` para que la UI la pinte
+       distinto de la energía prestada. Mejor que cobrar la luz a $0.
+
+    Solo actúa si aún no hay energía (medida o estimada); nunca pisa medidas.
     """
     # No se toca la energía MEDIDA; una estimación previa sí puede refrescarse
     # (p.ej. si luego se resuelve el material y cambia la potencia por tipo).
     if record.energy_kwh is not None and not record.energy_estimated:
         return
-    if printer.ha_energy_entity or not printer.power_ref_printer_id:
-        return  # tiene sensor propio, o no referencia a nadie
+    if printer.ha_energy_entity:
+        # Con sensor propio solo se estima cuando ya se sabe que la medida no
+        # va a llegar (unavailable es final); mientras haya reintentos
+        # pendientes no se bloquean con una estimación.
+        if not (record.energy_unavailable or record.energy_fallback):
+            return
+        power_pid, fallback = printer.id, True
+    elif printer.power_ref_printer_id:
+        power_pid, fallback = printer.power_ref_printer_id, False
+    else:
+        return  # sin sensor y sin referencia: no hay de dónde estimar
     duration_h = (record.print_duration_s or 0.0) / 3600.0
     if duration_h <= 0:
         # Job de 0 s (cancelado al instante): no hay nada que estimar. Se marca
@@ -191,9 +205,10 @@ def _borrow_energy(
     from .estimate import avg_power_w  # perezoso: estimate importa de este módulo
 
     mtype = material.material_type if material else None
-    power_w, _ = avg_power_w(session, printer.power_ref_printer_id, mtype)
+    power_w, _ = avg_power_w(session, power_pid, mtype)
     record.energy_kwh = round(power_w / 1000.0 * duration_h, 4)
     record.energy_estimated = True
+    record.energy_fallback = fallback
     # Estimada, pero ya no es irrecuperable: hay un valor con el que costear.
     record.energy_unavailable = False
 

@@ -88,6 +88,8 @@ def test_no_pisa_energia_ya_medida(Session):
 
 def test_impresora_con_sensor_no_toma_prestado(Session):
     # La referencia SÍ tiene sensor: aunque no midamos (ha=None), no pide prestado.
+    # Mientras la energía siga siendo recuperable (unavailable=False) tampoco
+    # se estima con la propia media: se espera al próximo sondeo.
     s = Session
     ref = s.query(Printer).filter_by(name="Creality Hi").one()
     from app.services.ingest import _borrow_energy
@@ -95,6 +97,48 @@ def test_impresora_con_sensor_no_toma_prestado(Session):
     _borrow_energy(s, rec, ref, None)
     assert rec.energy_kwh is None
     assert not rec.energy_estimated   # None/False en memoria: no se estimó
+
+
+def test_sensor_propio_sin_datos_estima_con_su_media(Session):
+    # Sensor propio pero ventana sin datos usables (recorder de HA caído):
+    # la energía es irrecuperable → se estima con la media de ESA impresora
+    # y se marca energy_fallback para pintarla distinto en la UI.
+    s = Session
+    ref = s.query(Printer).filter_by(name="Creality Hi").one()
+    from app.services.ingest import _borrow_energy
+    rec = PrintJob(printer_id=ref.id, moonraker_job_id="z",
+                   print_duration_s=7200, energy_unavailable=True)
+    pla = s.query(Material).filter_by(name="PLA genérico").one()
+    _borrow_energy(s, rec, ref, pla)
+    # 500 W (su propia media) × 2 h = 1.0 kWh
+    assert rec.energy_kwh == pytest.approx(1.0, abs=1e-3)
+    assert rec.energy_estimated is True
+    assert rec.energy_fallback is True
+    assert rec.energy_unavailable is False
+    # Se refresca en sondeos posteriores (sigue siendo estimación)…
+    rec.material_id = pla.id
+    _borrow_energy(s, rec, ref, pla)
+    assert rec.energy_fallback is True
+    # …pero jamás pisa una medida real.
+    rec.energy_kwh, rec.energy_estimated, rec.energy_fallback = 0.7, False, False
+    _borrow_energy(s, rec, ref, pla)
+    assert rec.energy_kwh == 0.7 and rec.energy_fallback is False
+
+
+def test_fallback_excluido_del_promedio(Session):
+    # La estimación por sensor caído tampoco contamina la potencia media.
+    s = Session
+    ref = s.query(Printer).filter_by(name="Creality Hi").one()
+    pla = s.query(Material).filter_by(name="PLA genérico").one()
+    from app.services.estimate import avg_power_w
+    antes, _ = avg_power_w(s, ref.id, "PLA")
+    s.add(PrintJob(printer_id=ref.id, moonraker_job_id="w", material_id=pla.id,
+                   status="completed", print_duration_s=3600, energy_kwh=9.9,
+                   energy_estimated=True, energy_fallback=True,
+                   start_time=RECIENTE, end_time=RECIENTE + timedelta(hours=1)))
+    s.commit()
+    despues, _ = avg_power_w(s, ref.id, "PLA")
+    assert despues == antes   # 9.9 kWh estimados no mueven la media
 
 
 def test_energia_prestada_excluida_del_promedio(Session):

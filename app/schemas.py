@@ -107,6 +107,7 @@ class JobOut(BaseModel):
     material_id: int | None
     energy_kwh: float | None
     energy_estimated: bool
+    energy_fallback: bool = False
     tariff_per_kwh: float
     currency: str
     cost_energy: float

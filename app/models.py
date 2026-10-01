@@ -194,6 +194,9 @@ class PrintJob(Base):
     # de otra impresora (ver Printer.power_ref_printer_id). El coste es válido
     # pero aproximado; la UI lo distingue de una medida real.
     energy_estimated: Mapped[bool] = mapped_column(default=False)
+    # Estimada porque el sensor PROPIO no tuvo datos (recorder de HA caído,
+    # enchufe offline…). Subtipo de energy_estimated: la UI lo pinta distinto.
+    energy_fallback: Mapped[bool] = mapped_column(default=False)
 
     # Snapshots de los parámetros usados al calcular (para reproducibilidad).
     tariff_per_kwh: Mapped[float] = mapped_column(Float, default=0.0)

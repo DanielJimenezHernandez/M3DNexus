@@ -158,6 +158,15 @@ textarea { resize: vertical; font-family: inherit; }
 #ped-monthly { margin-bottom: 1rem; }
 .monthly-table { width: 100%; }
 .monthly-table tr.grand td { border-top: 2px solid var(--border); }
+/* Separador de mes en el tablero (orden por fecha). */
+.month-sep { display: flex; align-items: baseline; gap: 0.6rem;
+  margin: 1.1rem 0 0.4rem; padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border); }
+.month-sep > span:first-child { font-weight: 700; color: var(--accent); }
+/* Checkboxes de contabilidad en el editor de pedido. */
+.chk-line .chk-pair { display: flex; align-items: center; gap: 0.45rem;
+  min-height: 2.1rem; cursor: pointer; }
+.chk-line input[type="checkbox"] { width: auto; }
 /* Reordenar ítems de cotización: el PDF sale en el orden de pantalla. */
 .q-move { display: inline-flex; gap: 0.25rem; }
 .q-move .btn { padding: 0.15rem 0.55rem; }

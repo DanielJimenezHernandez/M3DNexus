@@ -2151,13 +2151,43 @@ function renderOrders() {
     if (filter === "delivered" && o.status !== "delivered") return false;
     return !q || `${o.client} ${o.description || ""}`.toLowerCase().includes(q);
   });
-  // Urgencia primero: vencidos y próximos arriba.
-  rows.sort((a, b) => dueSort(a) - dueSort(b));
+  // Orden elegible: urgencia (vencidos/próximos arriba) o fecha de entrada.
+  // En los modos por fecha, el tablero se separa con cabeceras de mes.
+  const sortMode = document.getElementById("ped-sort").value;
+  const ctime = (o) => o.created_at ? new Date(o.created_at).getTime() : 0;
+  if (sortMode === "date-desc") rows.sort((a, b) => ctime(b) - ctime(a));
+  else if (sortMode === "date-asc") rows.sort((a, b) => ctime(a) - ctime(b));
+  else rows.sort((a, b) => dueSort(a) - dueSort(b));
 
   const host = document.getElementById("orders-board");
   if (!rows.length) { host.innerHTML = `<p class="muted">Sin pedidos.</p>`; return; }
 
+  const monthOf = (o) => o.created_at ? String(o.created_at).slice(0, 7) : "";
+  const monthLabel = (key) => {
+    if (!key) return "Sin fecha";
+    const dt = new Date(key + "-01T12:00:00");
+    const s = dt.toLocaleDateString("es", { month: "long", year: "numeric" });
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+  let lastMonth = null;
   host.innerHTML = rows.map((o) => {
+    let sep = "";
+    if (sortMode !== "urgency") {
+      const mk = monthOf(o);
+      if (mk !== lastMonth) {
+        lastMonth = mk;
+        const n = rows.filter((r) => monthOf(r) === mk).length;
+        sep = `<div class="month-sep"><span>${escHtml(monthLabel(mk))}</span>
+          <span class="muted">${n} pedido${n === 1 ? "" : "s"}</span></div>`;
+      }
+    }
+    return sep + orderCardHTML(o);
+  }).join("");
+  wireOrdersBoard();
+}
+
+function orderCardHTML(o) {
+  {
     const cur = o.currency || currency;
     const items = o.items.map((it, idx) => {
       const printing = it.status === "printing";
@@ -2281,8 +2311,11 @@ function renderOrders() {
         : (o.folder ? `<div class="order-folder muted">📁 carpeta ${escHtml(o.folder)} <span class="muted">(pon la ruta base en Ajustes)</span></div>` : "")}
       <div class="order-items">${items || '<span class="muted">Sin piezas</span>'}</div>
     </div>`;
-  }).join("");
+  }
+}
 
+function wireOrdersBoard() {
+  const host = document.getElementById("orders-board");
   host.querySelectorAll("[data-copy-path]").forEach((b) =>
     b.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(b.dataset.copyPath); toast("Ruta copiada"); }
@@ -2362,7 +2395,9 @@ function orderToBody(o) {
     payment_status: o.payment_status, agreed_price: o.agreed_price,
     currency: o.currency, due_date: o.due_date,
     manual_status: o.manual_status, notes: o.notes, folder: o.folder,
-    deposit_amount: o.deposit_amount, postproc_rate: o.postproc_rate,
+    deposit_amount: o.deposit_amount,
+    invoiced: !!o.invoiced, in_report: o.in_report !== false,
+    postproc_rate: o.postproc_rate,
     postproc_minutes: o.postproc_minutes || 0,
     extra_expenses: o.extra_expenses || [],
     items: o.items.map((it) => ({
@@ -2478,6 +2513,14 @@ function orderForm(o = {}, host = document.getElementById("order-form-host")) {
         <option value="delivered" ${oms === "delivered" ? "selected" : ""}>Entregado</option>
         <option value="cancelled" ${oms === "cancelled" ? "selected" : ""}>Cancelado</option>
       </select></label>
+      <label class="field chk-line" title="El pedido llevó su propia factura: queda FUERA de la factura general del mes">
+        <span>Contabilidad</span>
+        <span class="chk-pair"><input type="checkbox" id="of-invoiced" ${o.invoiced ? "checked" : ""}> Requirió factura</span>
+      </label>
+      <label class="field chk-line" title="Apágalo en pedidos cobrados en efectivo que NO quieres en la factura general del mes">
+        <span>&nbsp;</span>
+        <span class="chk-pair"><input type="checkbox" id="of-inreport" ${o.in_report === false ? "" : "checked"}> Incluir en factura general</span>
+      </label>
     </div>
     <div class="toolbar" style="margin:.4rem 0"><strong>Piezas</strong>
       <span class="spacer"></span>
@@ -2636,6 +2679,8 @@ async function saveOrder(id, host, inline = false) {
     deposit_amount: pay === "deposit" && deposit ? parseFloat(deposit) : null,
     due_date: due ? new Date(due).toISOString() : null,
     manual_status: host.querySelector("#of-manual").value || null,
+    invoiced: host.querySelector("#of-invoiced").checked,
+    in_report: host.querySelector("#of-inreport").checked,
     folder: host.querySelector("#of-folder").value.trim() || null,
     postproc_rate: host.querySelector("#of-postrate").value ? parseFloat(host.querySelector("#of-postrate").value) : null,
     postproc_minutes: Math.max(0, (parseInt(host.querySelector("#of-post-h").value) || 0) * 60
@@ -2672,6 +2717,7 @@ async function toggleQueue() {
 document.getElementById("add-order").addEventListener("click", () => orderForm());
 document.getElementById("ped-filter").addEventListener("change", renderOrders);
 document.getElementById("ped-search").addEventListener("input", renderOrders);
+document.getElementById("ped-sort").addEventListener("change", renderOrders);
 document.getElementById("ped-queue-toggle").addEventListener("click", toggleQueue);
 
 // Resumen contable por mes de entrada (created_at): nº de pedidos y monto
@@ -2686,35 +2732,38 @@ async function toggleMonthly() {
     const s = dt.toLocaleDateString("es", { month: "long", year: "numeric" });
     return s.charAt(0).toUpperCase() + s.slice(1);
   };
-  const totalAll = d.months.reduce((a, m) => a + m.total, 0);
-  const pedidosAll = d.months.reduce((a, m) => a + m.orders, 0);
+  const sum = (k) => d.months.reduce((a, m) => a + m[k], 0);
   host.innerHTML = d.months.length
     ? `<div class="card">
         <div class="toolbar" style="margin-bottom:.4rem">
-          <strong>Pedidos y monto por mes de entrada</strong>
+          <strong>Pedidos y montos por mes de entrada</strong>
           <span class="spacer"></span>
           <a class="btn ghost small" href="/api/orders/monthly.csv">Exportar CSV (para contabilidad)</a>
         </div>
         <table class="monthly-table">
           <tr><th>Mes</th><th class="num">Pedidos</th><th class="num">Entregados</th>
-              <th class="num">Monto</th><th></th></tr>
+              <th class="num" title="Pedidos sin factura propia y marcados 'incluir': lo que el contador mete a la factura general del mes">Monto para factura general</th>
+              <th class="num" title="Todo lo entrado en el mes, facturado o no">Ingresos totales</th><th></th></tr>
           ${d.months.map((m) => `<tr>
             <td>${escHtml(mesName(m.month))}</td>
             <td class="num">${m.orders}</td>
             <td class="num">${m.delivered}</td>
-            <td class="num"><strong>${money2(m.total, d.currency)}</strong></td>
+            <td class="num"><strong>${money2(m.total_invoice, d.currency)}</strong></td>
+            <td class="num">${money2(m.total, d.currency)}</td>
             <td class="muted">${[
               m.sin_precio ? `${m.sin_precio} sin precio` : "",
               m.cancelled ? `${m.cancelled} cancelado${m.cancelled > 1 ? "s" : ""}` : "",
             ].filter(Boolean).join(" · ")}</td>
           </tr>`).join("")}
           <tr class="grand"><td><strong>Total</strong></td>
-            <td class="num"><strong>${pedidosAll}</strong></td><td></td>
-            <td class="num"><strong>${money2(totalAll, d.currency)}</strong></td><td></td></tr>
+            <td class="num"><strong>${sum("orders")}</strong></td><td></td>
+            <td class="num"><strong>${money2(sum("total_invoice"), d.currency)}</strong></td>
+            <td class="num"><strong>${money2(sum("total"), d.currency)}</strong></td><td></td></tr>
         </table>
-        <p class="muted" style="margin:.5rem 0 0">El monto es el precio acordado de los
-          pedidos <em>entrados</em> ese mes (cancelados no suman). El CSV lleva la
-          relación pedido a pedido con fecha, cliente, pago y anticipo.</p>
+        <p class="muted" style="margin:.5rem 0 0">Factura general = pedidos sin
+          "Requirió factura" y con "Incluir en factura general" encendido (efectivo
+          fuera). Ingresos totales = todo lo entrado (cancelados no suman en ninguno).
+          El CSV lleva la relación pedido a pedido con ambos indicadores.</p>
       </div>`
     : `<p class="muted">Aún no hay pedidos.</p>`;
   host.hidden = false;

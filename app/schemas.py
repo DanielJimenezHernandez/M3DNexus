@@ -308,6 +308,9 @@ class OrderIn(BaseModel):
     notes: str | None = None
     folder: str | None = None
     deposit_amount: float | None = None
+    # Contabilidad: factura propia / entra a la factura general del mes.
+    invoiced: bool = False
+    in_report: bool = True
     postproc_rate: float | None = None
     postproc_minutes: int = 0
     extra_expenses: list[ExpenseIn] = []

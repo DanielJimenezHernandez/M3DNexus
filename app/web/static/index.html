@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — gestión de impresión 3D</title>
-  <link rel="stylesheet" href="/style.css?v=117" />
+  <link rel="stylesheet" href="/style.css?v=118" />
 </head>
 <body>
   <!-- Panel lateral colapsable. Los botones conservan data-tab: es la clave que
@@ -122,6 +122,11 @@
             <option value="delivered">Entregados</option>
           </select>
           <input type="search" id="ped-search" placeholder="Cliente o descripción…" />
+          <select id="ped-sort" title="Orden del tablero">
+            <option value="urgency">Por urgencia</option>
+            <option value="date-desc">Por fecha ↓ (recientes)</option>
+            <option value="date-asc">Por fecha ↑ (antiguos)</option>
+          </select>
           <span class="spacer"></span>
           <span id="ped-summary" class="ped-summary muted"></span>
           <button class="btn ghost small" id="ped-queue-toggle">Ver cola por impresora</button>
@@ -343,6 +348,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=117"></script>
+  <script src="/app.js?v=118"></script>
 </body>
 </html>

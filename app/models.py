@@ -347,6 +347,11 @@ class Order(Base):
     folder: Mapped[str | None] = mapped_column(String, nullable=True)
     # Anticipo recibido (solo relevante con payment_status = deposit).
     deposit_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Contabilidad: si el pedido requirió factura propia (queda fuera de la
+    # factura general del mes) y si entra al monto de la factura general del
+    # reporte mensual (los pagados en efectivo suelen excluirse).
+    invoiced: Mapped[bool] = mapped_column(default=False)
+    in_report: Mapped[bool] = mapped_column(default=True)
     # Post-procesado del pedido: tarifa/hora del trabajador y minutos totales.
     postproc_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     postproc_minutes: Mapped[int] = mapped_column(Integer, default=0)

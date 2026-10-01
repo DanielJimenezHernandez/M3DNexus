@@ -992,6 +992,8 @@ def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -
         "folder": order.folder,
         "folder_path": _compose_folder(base, order.folder),
         "deposit_amount": order.deposit_amount,
+        "invoiced": bool(order.invoiced),
+        "in_report": order.in_report is not False,
         "postproc_rate": order.postproc_rate,
         "postproc_minutes": order.postproc_minutes or 0,
         "postproc_cost": postproc_cost,
@@ -1051,9 +1053,14 @@ def orders_queue(db: Session = Depends(get_session)):
 
 @router.get("/orders/monthly")
 def orders_monthly(db: Session = Depends(get_session)):
-    """Resumen contable: pedidos entrados y monto por mes (por ``created_at``).
+    """Resumen contable: pedidos entrados y montos por mes (por ``created_at``).
 
-    Los cancelados se cuentan aparte y no suman al monto; los pedidos sin
+    Dos montos por mes:
+    - ``total_invoice`` (factura general): pedidos SIN factura propia
+      (``invoiced`` apagado) que además están marcados para entrar al reporte
+      (``in_report``). Los pagados en efectivo se excluyen apagando in_report.
+    - ``total`` (ingresos totales): todo lo entrado, facturado o no.
+    Los cancelados se cuentan aparte y no suman a ninguno; los pedidos sin
     precio acordado cuentan como entrados pero se reportan para revisarlos.
     """
     _, currency = get_settings(db)
@@ -1061,7 +1068,7 @@ def orders_monthly(db: Session = Depends(get_session)):
     for o in db.scalars(select(Order)).unique().all():
         key = o.created_at.strftime("%Y-%m") if o.created_at else "sin-fecha"
         m = months.setdefault(key, {
-            "month": key, "orders": 0, "total": 0.0,
+            "month": key, "orders": 0, "total": 0.0, "total_invoice": 0.0,
             "delivered": 0, "cancelled": 0, "sin_precio": 0,
         })
         if o.manual_status == "cancelled":
@@ -1070,6 +1077,8 @@ def orders_monthly(db: Session = Depends(get_session)):
         m["orders"] += 1
         if o.agreed_price:
             m["total"] += o.agreed_price
+            if not o.invoiced and o.in_report is not False:
+                m["total_invoice"] += o.agreed_price
         else:
             m["sin_precio"] += 1
         if o.manual_status == "delivered":
@@ -1077,6 +1086,7 @@ def orders_monthly(db: Session = Depends(get_session)):
     out = sorted(months.values(), key=lambda x: x["month"], reverse=True)
     for m in out:
         m["total"] = round(m["total"], 2)
+        m["total_invoice"] = round(m["total_invoice"], 2)
     return {"months": out, "currency": currency}
 
 
@@ -1090,9 +1100,11 @@ def orders_monthly_csv(db: Session = Depends(get_session)):
     w = csv.writer(buf)
     w.writerow(["mes", "fecha_entrada", "pedido", "cliente", "descripcion",
                 "precio_acordado", "pago", "anticipo", "fecha_entrega",
-                "estado", "moneda"])
+                "estado", "requirio_factura", "en_factura_general", "moneda"])
     for o in orders:
         estado = o.manual_status or "activo"
+        en_general = (not o.invoiced and o.in_report is not False
+                      and o.manual_status != "cancelled")
         w.writerow([
             o.created_at.strftime("%Y-%m") if o.created_at else "",
             o.created_at.strftime("%Y-%m-%d") if o.created_at else "",
@@ -1104,6 +1116,8 @@ def orders_monthly_csv(db: Session = Depends(get_session)):
             o.deposit_amount if o.deposit_amount is not None else "",
             o.due_date.strftime("%Y-%m-%d") if o.due_date else "",
             estado,
+            "sí" if o.invoiced else "no",
+            "sí" if en_general else "no",
             o.currency,
         ])
     return Response(
@@ -1126,6 +1140,8 @@ def _apply_order(order: Order, data: OrderIn, db: Session) -> None:
     order.folder = data.folder
     # El anticipo solo tiene sentido si el pago es "anticipo"; si no, se limpia.
     order.deposit_amount = data.deposit_amount if data.payment_status == "deposit" else None
+    order.invoiced = data.invoiced
+    order.in_report = data.in_report
     order.postproc_rate = data.postproc_rate
     order.postproc_minutes = data.postproc_minutes
     order.extra_expenses = [e.model_dump() for e in data.extra_expenses] or None

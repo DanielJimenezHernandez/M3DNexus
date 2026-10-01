@@ -75,6 +75,8 @@ def _migrate() -> None:
             "extra_expenses": "ALTER TABLE orders ADD COLUMN extra_expenses JSON",
             "postproc_rate": "ALTER TABLE orders ADD COLUMN postproc_rate FLOAT",
             "postproc_minutes": "ALTER TABLE orders ADD COLUMN postproc_minutes INTEGER DEFAULT 0",
+            "invoiced": "ALTER TABLE orders ADD COLUMN invoiced BOOLEAN DEFAULT 0",
+            "in_report": "ALTER TABLE orders ADD COLUMN in_report BOOLEAN DEFAULT 1",
         },
         "order_items": {
             "extra_expenses": "ALTER TABLE order_items ADD COLUMN extra_expenses JSON",

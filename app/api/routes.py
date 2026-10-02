@@ -36,6 +36,7 @@ from ..models import (
     SETTING_ORDERS_FOLDER_BASE,
     SETTING_PAYMENT_INFO,
     SETTING_QUOTE_TERMS,
+    BusinessExpense,
     Material,
     Order,
     OrderItem,
@@ -47,6 +48,7 @@ from ..models import (
 )
 from ..schemas import (
     AssignMaterialIn,
+    BusinessExpenseIn,
     JobOut,
     MaterialIn,
     MaterialOut,
@@ -1051,6 +1053,144 @@ def orders_queue(db: Session = Depends(get_session)):
     return list(queue.values())
 
 
+# --------------------------------------------------------------------------- #
+# Gastos del negocio (contabilidad / rentabilidad)
+# --------------------------------------------------------------------------- #
+def _expense_dict(x: BusinessExpense, db: Session) -> dict:
+    return {
+        "id": x.id, "date": x.date, "concept": x.concept, "detail": x.detail,
+        "category": x.category, "supplier": x.supplier, "amount": x.amount,
+        "currency": x.currency, "invoiced": bool(x.invoiced),
+        "payment_method": x.payment_method,
+        "photo_url": _entity_first_photo(db, "expense", x.id),
+    }
+
+
+@router.get("/expenses")
+def list_expenses(db: Session = Depends(get_session)):
+    rows = db.scalars(
+        select(BusinessExpense).order_by(BusinessExpense.date.desc())
+    ).all()
+    return [_expense_dict(x, db) for x in rows]
+
+
+@router.get("/expenses/summary")
+def expenses_summary(db: Session = Depends(get_session)):
+    """Rentabilidad por mes (ingresos de pedidos − gastos) y gasto por categoría."""
+    _, currency = get_settings(db)
+    months: dict[str, dict] = {}
+
+    def month_row(key: str) -> dict:
+        return months.setdefault(key, {
+            "month": key, "expenses": 0.0, "invoiced_expenses": 0.0,
+            "income": 0.0, "by_category": {},
+        })
+
+    by_category: dict[str, float] = {}
+    for x in db.scalars(select(BusinessExpense)).all():
+        key = x.date.strftime("%Y-%m") if x.date else "sin-fecha"
+        m = month_row(key)
+        m["expenses"] += x.amount or 0.0
+        if x.invoiced:
+            m["invoiced_expenses"] += x.amount or 0.0
+        cat = (x.category or "Sin categoría").strip() or "Sin categoría"
+        m["by_category"][cat] = m["by_category"].get(cat, 0.0) + (x.amount or 0.0)
+        by_category[cat] = by_category.get(cat, 0.0) + (x.amount or 0.0)
+
+    # Ingresos: mismo criterio que el resumen mensual de pedidos (todo lo
+    # entrado ese mes salvo cancelados).
+    for o in db.scalars(select(Order)).unique().all():
+        if o.manual_status == "cancelled" or not o.agreed_price:
+            continue
+        key = o.created_at.strftime("%Y-%m") if o.created_at else "sin-fecha"
+        month_row(key)["income"] += o.agreed_price
+
+    out = sorted(months.values(), key=lambda x: x["month"], reverse=True)
+    for m in out:
+        m["expenses"] = round(m["expenses"], 2)
+        m["invoiced_expenses"] = round(m["invoiced_expenses"], 2)
+        m["income"] = round(m["income"], 2)
+        m["profit"] = round(m["income"] - m["expenses"], 2)
+        m["by_category"] = {k: round(v, 2) for k, v in m["by_category"].items()}
+    return {
+        "months": out,
+        "by_category": {k: round(v, 2) for k, v in
+                        sorted(by_category.items(), key=lambda kv: -kv[1])},
+        "currency": currency,
+    }
+
+
+@router.get("/expenses.csv")
+def expenses_csv(db: Session = Depends(get_session)):
+    """Relación de gastos para contabilidad: una fila por gasto."""
+    rows = db.scalars(
+        select(BusinessExpense).order_by(BusinessExpense.date.desc())
+    ).all()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["mes", "fecha", "concepto", "detalle", "categoria", "proveedor",
+                "monto", "se_pidio_factura", "metodo_pago", "moneda"])
+    for x in rows:
+        w.writerow([
+            x.date.strftime("%Y-%m") if x.date else "",
+            x.date.strftime("%Y-%m-%d") if x.date else "",
+            x.concept, x.detail or "", x.category or "", x.supplier or "",
+            x.amount, "sí" if x.invoiced else "no",
+            x.payment_method or "", x.currency,
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=m3dnexus_gastos.csv"},
+    )
+
+
+def _apply_expense(x: BusinessExpense, data: BusinessExpenseIn, db: Session) -> None:
+    x.concept = data.concept
+    x.date = data.date or x.date
+    x.detail = data.detail
+    x.category = data.category
+    x.supplier = data.supplier
+    x.amount = data.amount
+    x.invoiced = data.invoiced
+    x.payment_method = data.payment_method
+    x.currency = get_settings(db)[1]
+
+
+@router.post("/expenses", status_code=201)
+def create_expense(data: BusinessExpenseIn, db: Session = Depends(get_session)):
+    x = BusinessExpense(concept=data.concept)
+    _apply_expense(x, data, db)
+    db.add(x)
+    db.commit()
+    db.refresh(x)
+    return _expense_dict(x, db)
+
+
+@router.put("/expenses/{expense_id}")
+def update_expense(expense_id: int, data: BusinessExpenseIn,
+                   db: Session = Depends(get_session)):
+    x = db.get(BusinessExpense, expense_id)
+    if not x:
+        raise HTTPException(404, "Gasto no encontrado")
+    _apply_expense(x, data, db)
+    db.commit()
+    return _expense_dict(x, db)
+
+
+@router.delete("/expenses/{expense_id}", status_code=204)
+def delete_expense(expense_id: int, db: Session = Depends(get_session)):
+    x = db.get(BusinessExpense, expense_id)
+    if x:
+        # Sus fotos de recibo se van con él.
+        for p in db.scalars(select(EntityPhoto).where(
+                EntityPhoto.entity_type == "expense",
+                EntityPhoto.entity_id == expense_id)).all():
+            db.delete(p)
+        db.delete(x)
+        db.commit()
+
+
 @router.get("/orders/monthly")
 def orders_monthly(db: Session = Depends(get_session)):
     """Resumen contable: pedidos entrados y montos por mes (por ``created_at``).
@@ -1399,9 +1539,9 @@ def add_entity_photo(payload: dict = Body(...), db: Session = Depends(get_sessio
     eid = payload.get("entity_id")
     if et not in ENTITY_PHOTO_TYPES:
         raise HTTPException(422, "entity_type inválido")
-    exists = db.get(Order, eid) if et == "order" else db.get(Project, eid)
-    if not exists:
-        raise HTTPException(404, "Pedido/proyecto no encontrado")
+    model = {"order": Order, "project": Project, "expense": BusinessExpense}[et]
+    if not db.get(model, eid):
+        raise HTTPException(404, "Pedido/proyecto/gasto no encontrado")
     count = db.scalar(
         select(func.count(EntityPhoto.id)).where(
             EntityPhoto.entity_type == et, EntityPhoto.entity_id == eid

@@ -158,6 +158,23 @@ textarea { resize: vertical; font-family: inherit; }
 #ped-monthly { margin-bottom: 1rem; }
 .monthly-table { width: 100%; }
 .monthly-table tr.grand td { border-top: 2px solid var(--border); }
+/* Gastos del negocio. */
+.gx-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 1.2rem; }
+@media (max-width: 900px) { .gx-grid { grid-template-columns: 1fr; } }
+.gx-row { display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.5rem 0.8rem; margin-bottom: 0.4rem; }
+.gx-row .gx-concept { display: flex; flex-direction: column; min-width: 0; }
+.gx-row .gx-detail { font-size: 0.78rem; }
+.gx-row .gx-date { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gx-row .gx-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pill.gx-cat { background: rgba(79, 140, 255, 0.15); color: var(--accent); }
+.pill.gx-fact { background: rgba(62, 207, 142, 0.15); color: var(--good); }
+.profit-pos { color: var(--good); }
+.profit-neg { color: var(--danger); }
+@media (max-width: 700px) {
+  .gx-row { flex-wrap: wrap; }
+  .gx-row .gx-amount { margin-left: auto; }
+}
 /* Separador de mes en el tablero (orden por fecha). */
 .month-sep { display: flex; align-items: baseline; gap: 0.6rem;
   margin: 1.1rem 0 0.4rem; padding-bottom: 0.25rem;

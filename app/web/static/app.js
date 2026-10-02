@@ -61,7 +61,7 @@ let currentTab = "dashboard";
 // la sección no siempre coincide con la ruta, así que se mapean aquí. El
 // servidor devuelve el index para estas rutas, y aquí se resuelve cuál abrir.
 const TAB_ROUTES = {
-  dashboard: "dashboard", pedidos: "trabajos", jobs: "impresiones",
+  dashboard: "dashboard", pedidos: "trabajos", gastos: "gastos", jobs: "impresiones",
   printers: "impresoras", materials: "materiales", calibracion: "calibracion",
   quote: "estimacion", cotizacion: "cotizacion", settings: "ajustes",
 };
@@ -148,7 +148,8 @@ async function goToJobsForGcode(gcodeFilename) {
 }
 
 function loadTab(name) {
-  ({ dashboard: loadDashboard, pedidos: () => setPedMode(projMode), jobs: loadJobs,
+  ({ dashboard: loadDashboard, pedidos: () => setPedMode(projMode), gastos: loadGastos,
+     jobs: loadJobs,
      printers: loadPrinters, materials: loadMaterials, calibracion: loadCalibracion,
      quote: loadEstimacion, cotizacion: loadCotizacion, settings: loadSettings })[name]?.();
 }
@@ -4332,6 +4333,207 @@ function printCotiz() {
     <div class="foot">${escHtml(s.company_name || "M3D Nexus")} — Transforma tus ideas en realidad con impresión 3D</div>
   `);
 }
+
+// --- Gastos del negocio (contabilidad / rentabilidad) ------------------------
+// Distintos de los "gastos extra" de un pedido: esto es el gasto general del
+// taller. La foto del recibo reutiliza la galería de entidad (type "expense").
+let gastos = [];
+let gastosSummary = null;
+const GX_CATS = ["Filamento", "Refacciones", "Herramientas", "Consumibles",
+  "Empaque", "Envíos", "Software", "Luz", "Renta", "Marketing", "Otros"];
+const GX_PIE_COLORS = ["#4f8cff", "#3ecf8e", "#ffb454", "#ff6b6b", "#b58cff",
+  "#5ad1e6", "#e6a1c3", "#9acd32", "#f0e68c", "#8b93a7"];
+const PAY_METHODS = { efectivo: "Efectivo", tarjeta: "Tarjeta",
+  transferencia: "Transferencia", otro: "Otro" };
+
+const gxMonthName = (key) => {
+  if (!/^\d{4}-\d{2}$/.test(key)) return key || "Sin fecha";
+  const s = new Date(key + "-01T12:00:00")
+    .toLocaleDateString("es", { month: "long", year: "numeric" });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
+const gxMonthOf = (x) => x.date ? String(x.date).slice(0, 7) : "";
+
+async function loadGastos() {
+  [gastos, gastosSummary] = await Promise.all([
+    api.get("/api/expenses"), api.get("/api/expenses/summary")]);
+  // Filtros: meses existentes y categorías usadas (conservan la selección).
+  const mSel = document.getElementById("gx-month");
+  const cSel = document.getElementById("gx-cat");
+  const curM = mSel.value, curC = cSel.value;
+  const monthKeys = [...new Set(gastos.map(gxMonthOf).filter(Boolean))].sort().reverse();
+  mSel.innerHTML = `<option value="">— todos los meses —</option>` +
+    monthKeys.map((k) => `<option value="${k}">${escHtml(gxMonthName(k))}</option>`).join("");
+  const cats = [...new Set(gastos.map((x) => x.category || "Sin categoría"))].sort();
+  cSel.innerHTML = `<option value="">— todas las categorías —</option>` +
+    cats.map((c) => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join("");
+  if ([...mSel.options].some((o) => o.value === curM)) mSel.value = curM;
+  if ([...cSel.options].some((o) => o.value === curC)) cSel.value = curC;
+  renderGastos();
+}
+
+function renderGastos() {
+  const d = gastosSummary;
+  const cur = d.currency || currency;
+  const nowKey = new Date().toISOString().slice(0, 7);
+  const mNow = d.months.find((m) => m.month === nowKey);
+  const yearPrefix = nowKey.slice(0, 4) + "-";
+  const yearExp = d.months.filter((m) => m.month.startsWith(yearPrefix))
+    .reduce((a, m) => a + m.expenses, 0);
+
+  // Tarjetas del mes en curso + acumulado del año.
+  const cards = [
+    ["Gastos este mes", money2(mNow?.expenses || 0, cur)],
+    ["Ingresos este mes", money2(mNow?.income || 0, cur)],
+    ["Utilidad este mes", money2((mNow?.income || 0) - (mNow?.expenses || 0), cur)],
+    [`Gastos ${nowKey.slice(0, 4)}`, money2(yearExp, cur)],
+  ];
+  document.getElementById("gx-cards").innerHTML = cards
+    .map(([l, v]) => `<div class="card"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
+
+  // Rentabilidad por mes + pastel "¿en qué se va el dinero?" (si hay filtro de
+  // mes, el pastel es de ESE mes; si no, del total histórico).
+  const selMonth = document.getElementById("gx-month").value;
+  const pieSrc = selMonth
+    ? (d.months.find((m) => m.month === selMonth)?.by_category || {})
+    : d.by_category;
+  const segs = Object.entries(pieSrc).map(([label, value], i) =>
+    ({ label, value, color: GX_PIE_COLORS[i % GX_PIE_COLORS.length] }));
+  const margin = (m) => m.income > 0
+    ? `${Math.round((m.income - m.expenses) / m.income * 100)}%` : "—";
+  document.getElementById("gx-summary").innerHTML = `<div class="card gx-grid">
+    <div>
+      <strong>Rentabilidad por mes</strong>
+      <table class="monthly-table" style="margin-top:.4rem">
+        <tr><th>Mes</th><th class="num">Ingresos</th><th class="num">Gastos</th>
+            <th class="num">Utilidad</th><th class="num">Margen</th></tr>
+        ${d.months.map((m) => `<tr>
+          <td>${escHtml(gxMonthName(m.month))}</td>
+          <td class="num">${money2(m.income, cur)}</td>
+          <td class="num">${money2(m.expenses, cur)}</td>
+          <td class="num"><strong class="${m.profit >= 0 ? "profit-pos" : "profit-neg"}">${money2(m.profit, cur)}</strong></td>
+          <td class="num">${margin(m)}</td>
+        </tr>`).join("")}
+      </table>
+    </div>
+    <div>
+      <strong>¿En qué se va el dinero? ${selMonth ? `<span class="muted">(${escHtml(gxMonthName(selMonth))})</span>` : ""}</strong>
+      ${pieChartSVG(segs)}
+    </div>
+  </div>`;
+
+  // Lista de gastos filtrada, agrupada por mes con subtotal.
+  const selCat = document.getElementById("gx-cat").value;
+  const rows = gastos.filter((x) =>
+    (!selMonth || gxMonthOf(x) === selMonth)
+    && (!selCat || (x.category || "Sin categoría") === selCat));
+  const host = document.getElementById("gx-list");
+  if (!rows.length) { host.innerHTML = `<p class="muted">Sin gastos registrados.</p>`; return; }
+  let lastMonth = null;
+  host.innerHTML = rows.map((x) => {
+    const mk = gxMonthOf(x);
+    let sep = "";
+    if (mk !== lastMonth) {
+      lastMonth = mk;
+      const sub = rows.filter((r) => gxMonthOf(r) === mk)
+        .reduce((a, r) => a + (r.amount || 0), 0);
+      sep = `<div class="month-sep"><span>${escHtml(gxMonthName(mk))}</span>
+        <span class="muted">${money2(sub, cur)}</span></div>`;
+    }
+    const foto = x.photo_url
+      ? `<img class="oi-thumb" src="${x.photo_url}" loading="lazy" alt="" onclick="window.open('${x.photo_url}','_blank')" title="Ver recibo">`
+      : `<div class="oi-thumb ph"></div>`;
+    return `${sep}<div class="card gx-row" data-xid="${x.id}">
+      ${foto}
+      <span class="muted gx-date">${x.date ? new Date(x.date).toLocaleDateString() : "—"}</span>
+      <span class="gx-concept">${escHtml(x.concept)}
+        ${x.detail ? `<span class="muted gx-detail">${escHtml(x.detail)}</span>` : ""}</span>
+      <span class="pill gx-cat">${escHtml(x.category || "Sin categoría")}</span>
+      ${x.supplier ? `<span class="muted">${escHtml(x.supplier)}</span>` : ""}
+      ${x.payment_method ? `<span class="muted">${PAY_METHODS[x.payment_method] || escHtml(x.payment_method)}</span>` : ""}
+      ${x.invoiced ? `<span class="pill gx-fact">factura</span>` : ""}
+      <span class="spacer"></span>
+      <strong class="gx-amount">${money2(x.amount, x.currency || cur)}</strong>
+      <button class="btn ghost small" data-edit-gx="${x.id}">Editar</button>
+      <button class="btn danger small" data-del-gx="${x.id}">✕</button>
+    </div>`;
+  }).join("");
+
+  host.querySelectorAll("[data-edit-gx]").forEach((b) =>
+    b.addEventListener("click", () =>
+      expenseForm(gastos.find((x) => x.id == b.dataset.editGx))));
+  host.querySelectorAll("[data-del-gx]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const x = gastos.find((g) => g.id == b.dataset.delGx);
+      if (!confirm(`¿Borrar el gasto “${x?.concept || ""}”?`)) return;
+      await api.send(`/api/expenses/${b.dataset.delGx}`, "DELETE");
+      toast("Gasto borrado"); loadGastos();
+    }));
+}
+
+function expenseForm(x = {}) {
+  const host = document.getElementById("expense-form-host");
+  const dateVal = (x.date ? new Date(x.date) : new Date()).toISOString().slice(0, 10);
+  host.innerHTML = `<div class="card" style="margin-bottom:1rem">
+    <div class="form-head">
+      <h2>${x.id ? "Editar" : "Nuevo"} gasto</h2>
+      <span class="spacer"></span>
+      <button class="btn" id="gx-save">Guardar</button>
+      <button class="btn ghost" id="gx-cancel">Cancelar</button>
+    </div>
+    <div class="form-grid">
+      <label class="field"><span>Fecha</span><input type="date" id="gx-date" value="${dateVal}"></label>
+      <label class="field"><span>Concepto</span><input id="gx-concept" placeholder="Bobina PLA negro x4" value="${escHtml(x.concept || "")}"></label>
+      <label class="field"><span>Monto</span><input type="number" step="0.01" min="0" id="gx-amount" value="${x.amount ?? ""}"></label>
+      <label class="field"><span>Categoría</span>
+        <input id="gx-category" list="gx-cat-list" placeholder="elige o escribe…" value="${escHtml(x.category || "")}">
+        <datalist id="gx-cat-list">${GX_CATS.map((c) => `<option value="${c}">`).join("")}</datalist></label>
+      <label class="field"><span>Proveedor</span><input id="gx-supplier" placeholder="Amazon, Polymaker…" value="${escHtml(x.supplier || "")}"></label>
+      <label class="field"><span>Método de pago</span><select id="gx-pay">
+        <option value="">—</option>
+        ${Object.entries(PAY_METHODS).map(([k, v]) =>
+          `<option value="${k}" ${x.payment_method === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <label class="field chk-line"><span>Contabilidad</span>
+        <span class="chk-pair"><input type="checkbox" id="gx-invoiced" ${x.invoiced ? "checked" : ""}> Se pidió factura</span></label>
+    </div>
+    <label class="field"><span>Detalles</span>
+      <textarea id="gx-detail" rows="2" placeholder="Notas: qué incluye, para qué proyecto, garantía…">${escHtml(x.detail || "")}</textarea></label>
+    <div class="entity-photos">
+      <div class="muted" style="font-size:.82rem;margin:.6rem 0 .3rem"><strong>Foto del recibo / compra</strong></div>
+      <div id="gx-photos">${x.id ? "" : '<span class="muted">Guarda el gasto y podrás subir la foto del recibo aquí mismo.</span>'}</div>
+    </div>
+  </div>`;
+  if (x.id) entityPhotoEditor(host.querySelector("#gx-photos"), "expense", x.id);
+  host.querySelector("#gx-cancel").onclick = () => { host.innerHTML = ""; };
+  host.querySelector("#gx-save").onclick = async () => {
+    const concept = host.querySelector("#gx-concept").value.trim();
+    if (!concept) { toast("El gasto necesita un concepto"); return; }
+    const dv = host.querySelector("#gx-date").value;
+    const body = {
+      concept,
+      date: dv ? new Date(dv + "T12:00:00").toISOString() : null,
+      amount: parseFloat(host.querySelector("#gx-amount").value) || 0,
+      category: host.querySelector("#gx-category").value.trim() || null,
+      supplier: host.querySelector("#gx-supplier").value.trim() || null,
+      payment_method: host.querySelector("#gx-pay").value || null,
+      invoiced: host.querySelector("#gx-invoiced").checked,
+      detail: host.querySelector("#gx-detail").value.trim() || null,
+    };
+    try {
+      const saved = x.id
+        ? await api.send(`/api/expenses/${x.id}`, "PUT", body)
+        : await api.send("/api/expenses", "POST", body);
+      toast("Gasto guardado");
+      await loadGastos();
+      // Recién creado: se reabre en modo edición para subir el recibo ya.
+      if (!x.id) expenseForm(saved); else host.innerHTML = "";
+    } catch (e) { toast("Error: " + e.message); }
+  };
+}
+
+document.getElementById("add-expense").addEventListener("click", () => expenseForm());
+document.getElementById("gx-month").addEventListener("change", renderGastos);
+document.getElementById("gx-cat").addEventListener("change", renderGastos);
 
 // --- Ajustes -----------------------------------------------------------------
 async function loadSettings() {

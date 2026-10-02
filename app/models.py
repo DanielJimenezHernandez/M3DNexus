@@ -410,8 +410,32 @@ class EntityPhoto(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
-ENTITY_PHOTO_TYPES = {"order", "project"}
-ENTITY_PHOTO_MAX = 8   # tope de fotos por pedido/proyecto
+ENTITY_PHOTO_TYPES = {"order", "project", "expense"}
+ENTITY_PHOTO_MAX = 8   # tope de fotos por pedido/proyecto/gasto
+
+
+class BusinessExpense(Base):
+    """Gasto del negocio (contabilidad): saber en qué se va el dinero.
+
+    Distinto de los "gastos extra" de un pedido/proyecto (que son coste de ESE
+    trabajo): esto es el gasto general del taller — filamento, refacciones,
+    herramientas, renta… Las fotos del recibo van en EntityPhoto("expense").
+    """
+
+    __tablename__ = "business_expenses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    concept: Mapped[str] = mapped_column(String)
+    detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
+    supplier: Mapped[str | None] = mapped_column(String, nullable=True)
+    amount: Mapped[float] = mapped_column(Float, default=0.0)
+    currency: Mapped[str] = mapped_column(String, default="€")
+    # Se pidió factura de esta compra (deducible para el contador).
+    invoiced: Mapped[bool] = mapped_column(default=False)
+    payment_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class Project(Base):

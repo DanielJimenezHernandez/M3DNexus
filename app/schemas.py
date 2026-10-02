@@ -297,6 +297,19 @@ class OrderItemIn(BaseModel):
         return v or None
 
 
+class BusinessExpenseIn(BaseModel):
+    """Gasto general del negocio (no confundir con ExpenseIn, el de pedidos)."""
+
+    concept: str
+    date: datetime | None = None
+    detail: str | None = None
+    category: str | None = None
+    supplier: str | None = None
+    amount: float = Field(default=0, ge=0)
+    invoiced: bool = False
+    payment_method: str | None = None
+
+
 class OrderIn(BaseModel):
     client: str
     description: str | None = None

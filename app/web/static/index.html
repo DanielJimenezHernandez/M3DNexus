@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — gestión de impresión 3D</title>
-  <link rel="stylesheet" href="/style.css?v=118" />
+  <link rel="stylesheet" href="/style.css?v=119" />
 </head>
 <body>
   <!-- Panel lateral colapsable. Los botones conservan data-tab: es la clave que
@@ -19,6 +19,7 @@
     <nav>
       <button data-tab="dashboard" class="active">Dashboard</button>
       <button data-tab="pedidos">Trabajos</button>
+      <button data-tab="gastos">Gastos</button>
       <button data-tab="jobs">Impresiones</button>
       <button data-tab="printers">Impresoras</button>
       <button data-tab="materials">Materiales</button>
@@ -49,6 +50,22 @@
       <table id="component-table"></table>
       <h2>Por impresora</h2>
       <table id="printer-stats-table"></table>
+    </section>
+
+    <!-- Gastos del negocio (contabilidad / rentabilidad) -->
+    <section id="gastos" class="tab">
+      <div class="toolbar">
+        <h2 style="margin:0">Gastos</h2>
+        <select id="gx-month"><option value="">— todos los meses —</option></select>
+        <select id="gx-cat"><option value="">— todas las categorías —</option></select>
+        <span class="spacer"></span>
+        <a class="btn ghost small" href="/api/expenses.csv">Exportar CSV (contabilidad)</a>
+        <button class="btn" id="add-expense">+ Nuevo gasto</button>
+      </div>
+      <div class="cards" id="gx-cards"></div>
+      <div id="gx-summary"></div>
+      <div id="expense-form-host"></div>
+      <div id="gx-list"></div>
     </section>
 
     <!-- Jobs -->
@@ -348,6 +365,6 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=118"></script>
+  <script src="/app.js?v=119"></script>
 </body>
 </html>

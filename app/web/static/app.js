@@ -3683,11 +3683,23 @@ function calcItem(item) {
 const COST_KEYS = ["material", "electricidad", "preparacion", "postprod",
                    "amortizacion", "subtotal", "cFallos", "pieza"];
 
-/** Suma de todos los ítems, cada componente ya multiplicado por su cantidad. */
+/** Suma de todos los ítems, cada componente ya multiplicado por su cantidad.
+
+Los ítems MANUALES (servicio / pieza a precio directo, ``data-manual``) no
+pasan por el cálculo de impresión: su precio de venta va tal cual, sin margen,
+acumulado en ``acc.manual``. */
 function quoteAggregate() {
   const acc = Object.fromEntries(COST_KEYS.map((k) => [k, 0]));
   acc.unidades = 0;
+  acc.manual = 0;
   const lines = allItems().map((el) => {
+    if (el.dataset.manual) {
+      const price = parseFloat(el.querySelector(".qm-price").value) || 0;
+      const qty = Math.max(1, parseInt(el.querySelector(".qm-qty").value) || 1);
+      acc.manual += price * qty;
+      acc.unidades += qty;
+      return { el, manual: true, price, qty };
+    }
     const c = calcItem(el);
     COST_KEYS.forEach((k) => { acc[k] += c[k] * c.qty; });
     acc.unidades += c.qty;
@@ -3696,19 +3708,22 @@ function quoteAggregate() {
   return { lines, acc };
 }
 
-/** Totales del documento: margen sobre el coste sumado, luego envío e IVA. */
+/** Totales del documento: margen sobre el coste de IMPRESIÓN sumado (los
+ítems manuales entran a precio directo, sin margen), luego envío e IVA. */
 function quoteTotals() {
   const { lines, acc } = quoteAggregate();
   const m = selectedMargin();
-  const subtotal = acc.pieza * (1 + m / 100);
+  const printSale = acc.pieza * (1 + m / 100);
+  const subtotal = printSale + acc.manual;
   // La ganancia se reparte proporcionalmente: el material lleva su parte del
   // margen (no que el servicio se lo lleve todo y quede desproporcionado).
   const materialTotal = acc.material * (1 + m / 100);
-  const servicioTotal = subtotal - materialTotal;
+  const servicioTotal = printSale - materialTotal;
   const envio = hnum("envio");
   const ivaPct = hnum("iva");
   const iva = (subtotal + envio) * ivaPct / 100;
   return { lines, acc, m, subtotal, materialTotal, servicioTotal,
+           manualTotal: acc.manual,
            envio, ivaPct, iva, total: subtotal + envio + iva };
 }
 
@@ -3805,6 +3820,7 @@ function recalcQuote() {
       ${row("Preparación", acc.preparacion)}${row("Postproducción", acc.postprod)}
       ${row("Amortización", acc.amortizacion)}
       ${row("Subtotal", acc.subtotal)}${row("Fallos", acc.cFallos)}${row("Coste total", acc.pieza, true)}
+      ${acc.manual ? row("Servicios / precio directo (sin margen)", acc.manual) : ""}
     </table>`;
 
   document.querySelector("#cotiz-summary .q-pie").innerHTML =
@@ -3823,6 +3839,14 @@ function recalcQuote() {
 
 /** Línea de coste bajo cada ítem, para ver qué aporta al total. */
 function renderItemCost(item) {
+  if (item.dataset.manual) {
+    const price = parseFloat(item.querySelector(".qm-price").value) || 0;
+    const qty = Math.max(1, parseInt(item.querySelector(".qm-qty").value) || 1);
+    item.querySelector(".q-itemcost").innerHTML =
+      `Precio directo <strong>${money(price)}</strong> · ${qty} ud → ` +
+      `venta ${money(price * qty)} <span class="muted">(sin margen)</span>`;
+    return;
+  }
   const c = calcItem(item);
   const m = selectedMargin();
   item.querySelector(".q-itemcost").innerHTML =
@@ -3843,11 +3867,13 @@ function selectedMargin() {
 function updateSale() {
   const sale = document.querySelector("#cotiz-summary .q-sale");
   if (!sale) return;
-  const coste = quoteAggregate().acc.pieza;
+  const agg = quoteAggregate().acc;
+  const coste = agg.pieza;
   const marginOf = (k) =>
     k === "custom" ? (parseFloat(sale.querySelector(".q-custom").value) || 0) : parseFloat(k);
+  // La venta mostrada incluye los ítems a precio directo (sin margen encima).
   sale.querySelectorAll("[data-price]").forEach((cell) => {
-    cell.textContent = money(coste * (1 + marginOf(cell.dataset.price) / 100));
+    cell.textContent = money(coste * (1 + marginOf(cell.dataset.price) / 100) + agg.manual);
   });
   sale.querySelectorAll("[data-gain]").forEach((cell) => {
     cell.textContent = money(coste * (marginOf(cell.dataset.gain) / 100));
@@ -4102,8 +4128,9 @@ function addItem() {
     types.map((t) => `<option value="${escHtml(t)}">${escHtml(t)}</option>`).join("");
 
   // Al añadir en lote lo normal es seguir con la misma máquina y material que
-  // el ítem anterior, así que se heredan en vez de empezar en blanco.
-  const prev = allItems().pop();
+  // el ítem anterior, así que se heredan en vez de empezar en blanco (los
+  // manuales no tienen impresora: se hereda del último ítem de gcode).
+  const prev = allItems().filter((i) => !i.dataset.manual).pop();
   if (prev) {
     printerSel.value = prev.querySelector(".q-printer2").value;
     typeSel.value = prev.querySelector(".q-type").value;
@@ -4126,13 +4153,63 @@ function addItem() {
   return item;
 }
 
+// Ítem manual: un servicio (modelado, ingeniería inversa…) o una pieza a
+// precio directo, mezclado con los gcodes en la misma cotización. Su precio
+// de venta va tal cual al documento: sin margen y sin desglose de impresión.
+function addManualItem() {
+  const item = el(`<div class="card quote-item" data-manual="1">
+    <div class="gcode-bar">
+      <span class="pill gx-cat">Servicio / precio directo</span>
+      <span class="spacer"></span>
+      <button type="button" class="btn danger small q-remove">Quitar</button>
+    </div>
+    <div class="item-body">
+      <div class="q-thumbwrap">
+        <div class="q-thumb placeholder"></div>
+        <button type="button" class="btn ghost small qm-photo-btn">+ Foto</button>
+        <input type="file" class="qm-photo" accept="image/*" hidden>
+      </div>
+      <div class="item-fields">
+        <div class="form-grid">
+          <label class="field"><span>Descripción</span><input class="qm-desc" placeholder="Modelado 3D / argollas / pieza comprada…"></label>
+          <label class="field"><span>Precio de venta (c/u)</span><input type="number" step="0.01" min="0" class="qm-price" value="0"></label>
+          <label class="field"><span>Cantidad</span><input type="number" min="1" class="qm-qty" value="1"></label>
+        </div>
+        <small class="muted">Va directo a la cotización: sin margen ni cálculo de impresión.</small>
+      </div>
+    </div>
+    <div class="q-itemcost muted"></div>
+  </div>`);
+  itemsHost().appendChild(item);
+  item.querySelectorAll(".qm-desc, .qm-price, .qm-qty").forEach((i) =>
+    i.addEventListener("input", recalcQuote));
+  item.querySelector(".q-remove").addEventListener("click", () => { item.remove(); recalcQuote(); });
+  item.querySelector(".q-remove").before(reorderButtons(item, recalcQuote));
+  const photoInput = item.querySelector(".qm-photo");
+  item.querySelector(".qm-photo-btn").addEventListener("click", () => photoInput.click());
+  photoInput.addEventListener("change", async () => {
+    const f = photoInput.files[0];
+    photoInput.value = "";
+    if (!f) return;
+    try {
+      item._thumb = await fileToDataUri(f, 640, 0.85);
+      item.querySelector(".q-thumbwrap .q-thumb").outerHTML =
+        `<img class="q-thumb" src="${item._thumb}" alt="">`;
+    } catch (e) { toast("No se pudo leer la imagen"); }
+  });
+  recalcQuote();
+  return item;
+}
+
 document.getElementById("add-item").addEventListener("click", addItem);
+document.getElementById("add-manual-item").addEventListener("click", addManualItem);
 document.getElementById("add-gcodes").addEventListener("click", () =>
   document.getElementById("bulk-gcode").click());
 document.getElementById("bulk-gcode").addEventListener("change", async (ev) => {
   // Si el único ítem sigue vacío, el primer gcode lo reutiliza.
   const items = allItems();
-  const vacio = items.length === 1 && !items[0].querySelector(".q-desc").value ? items[0] : null;
+  const vacio = items.length === 1 && !items[0].dataset.manual
+    && !items[0].querySelector(".q-desc").value ? items[0] : null;
   await addItemsFromFiles(ev.target.files, vacio);
   ev.target.value = "";
 });
@@ -4293,11 +4370,27 @@ function printCotiz() {
   // vacía en todas las filas queda peor que no tenerla.
   const conThumb = items.some((it) => it._thumb);
 
-  const filas = q.lines.map(({ el: item, c }, i) => {
-    const unit = c.pieza * (1 + q.m / 100);
+  const filas = q.lines.map((line, i) => {
+    const { el: item } = line;
     const thumb = item._thumb;
+    const celdaThumb = conThumb
+      ? `<td class="thumb">${thumb ? `<img src="${escHtml(thumb)}" alt="">` : ""}</td>` : "";
+    // Ítem manual (servicio / precio directo): su precio va tal cual.
+    if (line.manual) {
+      return `<tr>
+        ${celdaThumb}
+        <td>${i + 1}. ${escHtml(item.querySelector(".qm-desc").value || "Servicio")}</td>
+        <td>—</td>
+        <td>—</td>
+        <td class="num">${money(line.price)}</td>
+        <td class="num">${line.qty}</td>
+        <td class="num">${money(line.price * line.qty)}</td>
+      </tr>`;
+    }
+    const { c } = line;
+    const unit = c.pieza * (1 + q.m / 100);
     return `<tr>
-      ${conThumb ? `<td class="thumb">${thumb ? `<img src="${escHtml(thumb)}" alt="">` : ""}</td>` : ""}
+      ${celdaThumb}
       <td>${i + 1}. ${escHtml(item.querySelector(".q-desc").value || "Pieza de impresión 3D")}</td>
       <td>${escHtml(item.querySelector(".q-type").value || "—")}</td>
       <td>${escHtml(item.querySelector(".q-res").value || "—")}</td>
@@ -4323,7 +4416,8 @@ function printCotiz() {
     <table class="totals">
       ${fold ? "" : `
       <tr><td>Costo de material</td><td class="num">${money(q.materialTotal)}</td></tr>
-      <tr><td>Servicio y operario</td><td class="num">${money(q.servicioTotal)}</td></tr>`}
+      <tr><td>Servicio y operario</td><td class="num">${money(q.servicioTotal)}</td></tr>
+      ${q.manualTotal ? `<tr><td>Servicios / precio directo</td><td class="num">${money(q.manualTotal)}</td></tr>` : ""}`}
       <tr><td>Sub-Total</td><td class="num">${money(q.subtotal)}</td></tr>
       <tr><td>Servicio de envío</td><td class="num">${money(q.envio)}</td></tr>
       <tr><td>IVA (${q.ivaPct}%)</td><td class="num">${money(q.iva)}</td></tr>

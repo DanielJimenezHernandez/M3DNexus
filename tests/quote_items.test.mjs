@@ -221,6 +221,25 @@ await t("desmarcado vuelve el desglose", () => {
   assert.ok(printedHtml.includes("Costo de material"));
   doc.getElementById("q-fold-servicio").checked = true;
 });
+await t("ítem manual: precio directo sin margen, mezclado en el PDF", () => {
+  items().forEach((i) => i.querySelector(".q-remove").click());
+  const g = window.eval("addItem()"); setI(g, ".q-desc", "llavero.gcode");
+  const m = window.eval("addManualItem()");
+  setI(m, ".qm-desc", "Modelado CAD"); setI(m, ".qm-price", 150); setI(m, ".qm-qty", 2);
+  // Sin costes de impresión: venta = 300 directo; IVA (300+200)×16% = 80 → 580.
+  const txt = doc.querySelector("#cotiz-bar .q-total").textContent;
+  assert.ok(/580/.test(txt), txt);
+  assert.ok(/3 ud/.test(txt), txt);              // 1 gcode + 2 manual
+  doc.getElementById("print-quote").click();
+  assert.ok(printedHtml.includes("Modelado CAD"), "falta el servicio en el PDF");
+  assert.ok(printedHtml.includes("llavero.gcode"), "falta el gcode en el PDF");
+  // La línea de coste del ítem lo deja claro en pantalla.
+  assert.ok(m.querySelector(".q-itemcost").textContent.includes("sin margen"));
+  // Las flechas de reordenar también funcionan en el manual.
+  m.querySelector(".q-up").click();
+  doc.getElementById("print-quote").click();
+  assert.ok(printedHtml.includes("1. Modelado CAD"), "no subió al primer lugar");
+});
 await t("sin ítems no imprime", () => {
   items().forEach((i) => i.querySelector(".q-remove").click());
   printedHtml = null;

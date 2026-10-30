@@ -2924,6 +2924,53 @@ function renderProjectsBoard() {
     }));
   host.querySelectorAll("[data-goto-gcode]").forEach((el) =>
     el.addEventListener("click", () => goToJobsForGcode(el.dataset.gotoGcode)));
+
+  // Editor de materiales por % (multimaterial) en el detalle de la parte.
+  host.querySelectorAll(".pmix").forEach((panel) => {
+    const rowsHost = panel.querySelector(".pmix-rows");
+    const sumLabel = panel.querySelector(".pmix-sum");
+    const readRows = () => [...rowsHost.querySelectorAll(".pmix-row")].map((r) => ({
+      type: r.querySelector(".pmix-type").value,
+      pct: parseFloat(r.querySelector(".pmix-pct").value) || 0,
+    })).filter((e) => e.type && e.pct > 0);
+    const updateSum = () => {
+      const total = readRows().reduce((a, e) => a + e.pct, 0);
+      sumLabel.textContent = rowsHost.querySelectorAll(".pmix-row").length > 1
+        ? `suma ${total.toFixed(1)}%${Math.abs(total - 100) > 0.5 ? " — se normaliza a 100%" : ""}` : "";
+    };
+    const wireRow = (row) => {
+      row.querySelector(".pmix-del").addEventListener("click", () => {
+        if (rowsHost.querySelectorAll(".pmix-row").length <= 1)
+          return toast("La pieza necesita al menos un material");
+        row.remove(); updateSum();
+      });
+      row.querySelector(".pmix-pct").addEventListener("input", updateSum);
+    };
+    rowsHost.querySelectorAll(".pmix-row").forEach(wireRow);
+    updateSum();
+    panel.querySelector(".pmix-add").addEventListener("click", () => {
+      const row = el(`<div class="pmix-row">
+        <select class="pmix-type">${projTypeOptions("")}</select>
+        <input type="number" class="pmix-pct" min="0.1" max="100" step="0.1" value="0"> <span class="muted">%</span>
+        <button type="button" class="btn ghost small pmix-del" title="Quitar material">✕</button>
+      </div>`);
+      rowsHost.appendChild(row);
+      wireRow(row); updateSum();
+    });
+    panel.querySelector(".pmix-save").addEventListener("click", async () => {
+      const rows = readRows();
+      if (!rows.length) return toast("Añade al menos un material con %");
+      // Un solo material: se guarda como tipo simple, sin mezcla.
+      const body = rows.length === 1
+        ? { material_type: rows[0].type, material_mix: null }
+        : { material_mix: rows };
+      try {
+        await api.send(`/api/project-parts/${panel.dataset.part}`, "POST", body);
+        toast(rows.length === 1 ? `Material: ${rows[0].type}` : "Mezcla guardada");
+        loadProjects();
+      } catch (e) { toast("Error: " + e.message); }
+    });
+  });
 }
 
 // Una parte de proyecto con el mismo look que una pieza de pedido (desplegable).
@@ -2940,28 +2987,48 @@ function projPartRow(p) {
   const gcodeCell = p.gcode_filename
     ? `<span class="gcode-nav" data-goto-gcode="${escHtml(p.gcode_filename)}" title="Ver la última impresión">${escHtml(gname)} →</span>`
     : escHtml(gname);
+  // Editor de materiales: una fila por tipo con su %, para multimaterial.
+  // Prefijado con la mezcla guardada o con el material único al 100%.
+  const mixRows = (p.material_mix && p.material_mix.length)
+    ? p.material_mix : [{ type: p.material_type, pct: 100 }];
+  const mixRow = (e) => `<div class="pmix-row">
+      <select class="pmix-type">${projTypeOptions(e.type)}</select>
+      <input type="number" class="pmix-pct" min="0.1" max="100" step="0.1" value="${e.pct}"> <span class="muted">%</span>
+      <button type="button" class="btn ghost small pmix-del" title="Quitar material">✕</button>
+    </div>`;
+  const mixPanel = `<div class="pmix" data-part="${p.id}">
+    <div class="review-head"><strong>Materiales de la pieza</strong>
+      <span class="muted">— reparte en % si fue multimaterial: el material se cobra ponderado
+        (precio medio de cada tipo) y la máquina con el tipo dominante</span></div>
+    <div class="pmix-rows">${mixRows.map(mixRow).join("")}</div>
+    <div class="pmix-actions">
+      <button type="button" class="btn ghost small pmix-add">+ Material</button>
+      <button type="button" class="btn small pmix-save">Guardar materiales</button>
+      <span class="muted pmix-sum"></span>
+    </div>
+  </div>`;
   const detail = `<div class="oi-detail">
     <button class="btn danger small oi-del" data-del-part="${p.id}"
       data-name="${escHtml(p.name || gname)}" title="Quitar esta parte del proyecto">✕ Quitar</button>
     ${bigThumb}<div class="oi-detail-body"><dl class="oi-dl">
     ${drow("Gcode", gcodeCell)}
     ${drow("Impresora", p.printer_name ? escHtml(p.printer_name) : null)}
-    ${drow("Material", `${escHtml(p.material_type)}${p.no_price ? ' <span class="pill review">sin precio</span>' : ""}`)}
+    ${drow("Material", `${escHtml(p.material_label || p.material_type)}${p.no_price ? ' <span class="pill review">sin precio</span>' : ""}`)}
     ${drow("Tiempo impresión", p.print_time_s ? fmtDur(p.print_time_s) : null)}
     ${drow("Peso (báscula)", `${p.weight_g} g`)}
-    ${drow("Precio /kg", p.price_per_kg ? money2(p.price_per_kg, currency) : null)}
+    ${drow("Precio /kg", p.price_per_kg ? `${money2(p.price_per_kg, currency)}${p.material_mix ? ' <span class="muted">(ponderado por %)</span>' : ""}` : null)}
     ${drow("Coste material", money2(p.material, currency))}
-    ${drow("Coste máquina", money2(p.machine, currency))}
+    ${drow("Coste máquina", `${money2(p.machine, currency)}${p.material_mix ? ` <span class="muted">(flota ${escHtml(p.dominant_type || "")})</span>` : ""}`)}
     ${drow("Cantidad", `<input type="number" min="1" class="ppart-qty" data-part="${p.id}" value="${p.quantity}" title="Cuántas veces se imprime este gcode en el proyecto"> <span class="muted">× ${money2(p.unit_cost, currency)} c/u</span>`)}
     ${drow("Coste total", `<strong>${money2(p.line_cost, currency)}</strong>`)}
-  </dl></div></div>`;
+  </dl>${mixPanel}</div></div>`;
   return `<div class="order-item-wrap ${p.included ? "" : "excluded"}" data-part-id="${p.id}">
     <div class="order-item" data-expand-part>
       <input type="checkbox" class="incl-check" data-incl-part="${p.id}" ${p.included ? "checked" : ""}
         title="${p.included ? "En la cuenta: suma al coste del proyecto" : "Fuera de la cuenta: no suma al coste"}">
       ${smallThumb}
       <span class="oi-names"><span class="oi-name">${escHtml(gname)}</span></span>
-      <span class="muted">${escHtml(p.material_type)}${p.weight_g ? " · " + p.weight_g + " g" : ""}${p.printer_name ? " · " + escHtml(p.printer_name) : ""}${p.quantity > 1 ? " · ×" + p.quantity : ""}</span>
+      <span class="muted">${escHtml(p.material_label || p.material_type)}${p.weight_g ? " · " + p.weight_g + " g" : ""}${p.printer_name ? " · " + escHtml(p.printer_name) : ""}${p.quantity > 1 ? " · ×" + p.quantity : ""}</span>
       <span class="spacer"></span>
       <label class="bed-wrap muted" title="Piezas iguales en la cama de impresión: el coste y el peso del gcode se dividen entre este número para ponderar por pieza">
         cama ÷ <input type="number" min="1" class="ppart-bed" data-part="${p.id}" value="${p.pieces_per_bed || 1}"></label>
@@ -3045,6 +3112,8 @@ function addProjectPart(host, pt, prepend) {
   // Preserva marcas que se editan en la tarjeta, no aquí, al re-guardar.
   row.dataset.included = pt.included === false ? "0" : "1";
   row.dataset.bed = String(pt.pieces_per_bed || 1);
+  // La mezcla multimaterial se edita en la tarjeta, no aquí: se preserva.
+  row.dataset.mix = pt.material_mix ? JSON.stringify(pt.material_mix) : "";
   row.querySelector(".pp-printer").addEventListener("change", () => loadPartGcodes(row));
   row.querySelector(".pp-gcode").addEventListener("change", () => autofillPart(row));
   if (pt.printer_id) loadPartGcodes(row);
@@ -3176,6 +3245,7 @@ function projectForm(pr = {}) {
       quantity: Math.max(1, parseInt(r.querySelector(".pp-qty").value) || 1),
       included: r.dataset.included !== "0",
       pieces_per_bed: Math.max(1, parseInt(r.dataset.bed) || 1),
+      material_mix: r.dataset.mix ? JSON.parse(r.dataset.mix) : null,
     }));
     const body = {
       name: form.querySelector(".pf-name").value || "Proyecto",

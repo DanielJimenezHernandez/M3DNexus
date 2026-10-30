@@ -235,11 +235,24 @@ class ProjectPartIn(BaseModel):
     included: bool = True   # False = se ve pero no suma a la cuenta
     # Piezas iguales por cama: divide el coste y el peso del gcode.
     pieces_per_bed: int = 1
+    # Multimaterial: [{"type": "PETG", "pct": 70}, …]; None = solo material_type.
+    material_mix: list[dict] | None = None
 
     @field_validator("pieces_per_bed")
     @classmethod
     def _bed(cls, v: int) -> int:
         return max(1, v)
+
+    @field_validator("material_mix")
+    @classmethod
+    def _mix(cls, v: list | None) -> list | None:
+        entries = [
+            {"type": str(e.get("type")).strip(), "pct": float(e.get("pct"))}
+            for e in (v or [])
+            if isinstance(e, dict) and str(e.get("type") or "").strip()
+            and isinstance(e.get("pct"), (int, float)) and e.get("pct") > 0
+        ]
+        return entries or None
 
     @field_validator("quantity")
     @classmethod

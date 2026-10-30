@@ -1463,9 +1463,31 @@ def update_project_part(part_id: int, payload: dict = Body(...), db: Session = D
         if bed < 1:
             raise HTTPException(422, "pieces_per_bed debe ser al menos 1")
         part.pieces_per_bed = bed
+    if "material_type" in payload:
+        mt = str(payload.get("material_type") or "").strip()
+        if not mt:
+            raise HTTPException(422, "material_type no puede quedar vacío")
+        part.material_type = mt
+    if "material_mix" in payload:
+        # Reparto multimaterial en %: lista de {type, pct>0}; null/[] lo quita.
+        mix = payload.get("material_mix")
+        if mix is not None and not isinstance(mix, list):
+            raise HTTPException(422, "material_mix debe ser una lista")
+        entries = [
+            {"type": str(e.get("type")).strip(), "pct": float(e.get("pct"))}
+            for e in (mix or [])
+            if isinstance(e, dict) and str(e.get("type") or "").strip()
+            and isinstance(e.get("pct"), (int, float)) and e.get("pct") > 0
+        ]
+        part.material_mix = entries or None
+        # El tipo visible pasa a ser el dominante de la mezcla.
+        if entries:
+            part.material_type = max(entries, key=lambda e: e["pct"])["type"]
     db.commit()
     return {"ok": True, "quantity": part.quantity, "included": part.included,
-            "pieces_per_bed": part.pieces_per_bed}
+            "pieces_per_bed": part.pieces_per_bed,
+            "material_type": part.material_type,
+            "material_mix": part.material_mix}
 
 
 @router.post("/projects/{project_id}/extra-included", status_code=200)

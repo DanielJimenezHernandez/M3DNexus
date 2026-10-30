@@ -489,6 +489,10 @@ class ProjectPart(Base):
     # coste y el peso del gcode se dividen entre este número para ponderar por
     # pieza del producto.
     pieces_per_bed: Mapped[int] = mapped_column(Integer, default=1)
+    # Impresión multimaterial: reparto en porcentajes, lista de
+    # {"type": "PETG", "pct": 70}. None/[] = un solo material (material_type).
+    # El material se cobra ponderado por % y la máquina con el tipo DOMINANTE.
+    material_mix: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     project: Mapped["Project"] = relationship(back_populates="parts")

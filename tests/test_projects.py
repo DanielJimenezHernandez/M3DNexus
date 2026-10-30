@@ -253,6 +253,49 @@ def test_piezas_por_cama_divide(env):
     assert env.post(f"/api/project-parts/{p['id']}", json={"pieces_per_bed": 0}).status_code == 422
 
 
+def test_mezcla_multimaterial_pondera_precio(env):
+    # PLA promedio 400/kg. Añadimos PETG a 800/kg para la mezcla.
+    env_post_material = env.post  # el fixture ya tiene TestClient
+    # PETG con precio (el del fixture no tiene): se crea vía API de materiales.
+    r = env.post("/api/materials", json={"name": "PETG caro", "material_type": "PETG",
+                                         "price_per_kg": 800})
+    assert r.status_code in (200, 201)
+    # Parte de 100 g / 1 h con mezcla 30% PLA + 70% PETG.
+    body = {"name": "P", "parts": [
+        {"material_type": "PLA", "weight_g": 100, "quantity": 1, "print_time_s": 3600,
+         "material_mix": [{"type": "PLA", "pct": 30}, {"type": "PETG", "pct": 70}]}]}
+    d = env.post("/api/projects", json=body).json()
+    p = d["parts"][0]
+    # Precio ponderado: 0.3×400 + 0.7×800 = 680/kg → material 0.1 kg × 680 = 68.
+    assert p["price_per_kg"] == pytest.approx(680.0, abs=0.1)
+    assert p["material"] == pytest.approx(68.0, abs=0.1)
+    assert p["dominant_type"] == "PETG"        # la máquina usa la flota del 70%
+    assert "70% PETG" in p["material_label"] and "30% PLA" in p["material_label"]
+    assert p["material_mix"] == [{"type": "PLA", "pct": 30.0}, {"type": "PETG", "pct": 70.0}]
+    # Cambiar la mezcla por endpoint (se normaliza aunque no sume 100).
+    r = env.post(f"/api/project-parts/{p['id']}",
+                 json={"material_mix": [{"type": "PLA", "pct": 1}, {"type": "PETG", "pct": 1}]})
+    assert r.status_code == 200
+    assert r.json()["material_type"] == "PLA"   # empate: gana el primero
+    d2 = env.get("/api/projects").json()[0]["parts"][0]
+    assert d2["price_per_kg"] == pytest.approx(600.0, abs=0.1)   # 50/50
+    # Quitar la mezcla → vuelve al tipo simple.
+    env.post(f"/api/project-parts/{p['id']}",
+             json={"material_mix": None, "material_type": "PLA"})
+    d3 = env.get("/api/projects").json()[0]["parts"][0]
+    assert d3["material_mix"] is None and d3["price_per_kg"] == 400.0
+
+
+def test_cambiar_material_type_por_endpoint(env):
+    pid = env.post("/api/projects", json={"name": "P", "parts": [
+        {"material_type": "PLA", "weight_g": 100, "quantity": 1}]}).json()
+    part = pid["parts"][0]
+    r = env.post(f"/api/project-parts/{part['id']}", json={"material_type": "PETG"})
+    assert r.status_code == 200 and r.json()["material_type"] == "PETG"
+    assert env.post(f"/api/project-parts/{part['id']}",
+                    json={"material_type": "  "}).status_code == 422
+
+
 def test_parse_gcode_name():
     from app.services.gcode_name import parse_gcode_name
     # Formato actual: todos los campos entre paréntesis.

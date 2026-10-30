@@ -40,10 +40,24 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
     parts_out = []
     mat_total = mach_total = weight_total = 0.0
     for p in project.parts:
-        key = (p.material_type or "").upper()
-        ppk = prices.get(key, 0.0)
+        # Reparto multimaterial (si lo hay): el precio/kg efectivo es el
+        # promedio ponderado por porcentaje de cada tipo. Para la máquina
+        # (energía por tipo) se usa el tipo DOMINANTE: el que más aporta.
+        raw_mix = [
+            e for e in (p.material_mix or [])
+            if isinstance(e, dict) and str(e.get("type") or "").strip()
+            and (e.get("pct") or 0) > 0
+        ]
+        if raw_mix:
+            total_pct = sum(e["pct"] for e in raw_mix)
+            shares = [(str(e["type"]).strip(), e["pct"] / total_pct) for e in raw_mix]
+        else:
+            shares = [(p.material_type or "", 1.0)]
+        ppk = sum(prices.get(t.upper(), 0.0) * s for t, s in shares)
+        dom_type = max(shares, key=lambda ts: ts[1])[0]
+        key = dom_type.upper()
         if key not in fleet_cache:
-            fleet_cache[key] = fleet_cost_per_hour(session, p.material_type, price, weighting)
+            fleet_cache[key] = fleet_cost_per_hour(session, dom_type, price, weighting)
         fleet = fleet_cache[key]
         per_h = fleet["avg_per_h"] if fleet else 0.0
 
@@ -68,11 +82,21 @@ def resolve_project(session: Session, project: Project, weighting: str = "usage"
             "printer_name": p.printer.name if p.printer else None,
             "gcode_filename": p.gcode_filename,
             "material_type": p.material_type,
+            # Mezcla normalizada a 100% (None si es de un solo material) y
+            # etiqueta legible ("70% PETG + 30% TPU") para la fila colapsada.
+            "material_mix": ([{"type": t, "pct": round(s * 100, 1)}
+                              for t, s in shares] if raw_mix else None),
+            "material_label": (" + ".join(
+                f"{round(s * 100)}% {t}" for t, s in
+                sorted(shares, key=lambda ts: -ts[1]))
+                if raw_mix else (p.material_type or "")),
+            "dominant_type": dom_type,
             "weight_g": round(p.weight_g or 0.0, 1),
             "quantity": qty,
             "print_time_s": p.print_time_s or 0.0,
-            "price_per_kg": ppk,
-            "no_price": ppk <= 0,
+            "price_per_kg": round(ppk, 2),
+            # Falta precio si CUALQUIER tipo de la mezcla no lo tiene.
+            "no_price": any(prices.get(t.upper(), 0.0) <= 0 for t, _ in shares),
             "included": included,
             "pieces_per_bed": bed,
             "material": round(material, 2),

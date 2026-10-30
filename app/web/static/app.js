@@ -2845,7 +2845,8 @@ function renderProjectsBoard() {
         <span class="pj-total">${money2(pr.cost_total, currency)}</span>
         <button class="btn ghost small" data-edit-proj="${pr.id}">Editar</button>
         <button class="btn danger small" data-del-proj="${pr.id}">✕</button>
-        <button class="btn ghost small" data-est-proj="${pr.id}" title="Cargar sus gcodes en la pestaña Estimación (promedio de flota)">→ Estimación</button></div>
+        <button class="btn ghost small" data-est-proj="${pr.id}" title="Cargar sus gcodes en la pestaña Estimación (promedio de flota)">→ Estimación</button>
+        <button class="btn ghost small" data-cotiz-proj="${pr.id}" title="Cargar el proyecto como ítems de la pestaña Cotización (peso de báscula, tiempo y precio ponderado; los gastos extra van como precio directo)">→ Cotización</button></div>
       ${pr.notes ? `<p class="muted" style="margin:.2rem 0">${escHtml(pr.notes)}</p>` : ""}
       <div class="order-items">${parts || '<span class="muted">Sin partes</span>'}</div>
       <div class="muted pj-foot">material ${money2(pr.material_cost, currency)}${pr.material_by_scale ? ` <span title="Cobrado por el peso de báscula (estimado por partes: ${money2(pr.material_cost_estimated, currency)})">(por báscula)</span>` : ""} · máquina ${money2(pr.machine_cost, currency)}${pr.extras_cost ? ` · extras ${money2(pr.extras_cost, currency)}` : ""} · ${recTxt}</div>
@@ -2860,6 +2861,8 @@ function renderProjectsBoard() {
     }));
   host.querySelectorAll("[data-est-proj]").forEach((b) =>
     b.addEventListener("click", () => loadProjectIntoEstimacion(projects.find((p) => p.id == b.dataset.estProj))));
+  host.querySelectorAll("[data-cotiz-proj]").forEach((b) =>
+    b.addEventListener("click", () => loadProjectIntoCotizacion(projects.find((p) => p.id == b.dataset.cotizProj))));
   // Parte desplegable (mismo mecanismo que las piezas de pedido). Se recuerda
   // qué partes están abiertas para reabrirlas tras un refresco del tablero.
   host.querySelectorAll(".order-item-wrap[data-part-id]").forEach((w) => {
@@ -3066,6 +3069,54 @@ async function loadProjectIntoEstimacion(pr) {
   renderEstFiles();
   recalcEstimate();
   toast(`${estFiles.length} gcodes de “${pr.name}” cargados en Estimación`);
+}
+
+// Carga el proyecto como ítems de la pestaña Cotización: cada parte con su
+// peso de báscula, tiempo real y precio/kg ponderado (la mezcla multimaterial
+// ya viene resuelta del servidor); los gastos extra entran como ítems de
+// precio directo. Sustituye lo que hubiera en la cotización.
+async function loadProjectIntoCotizacion(pr) {
+  if (!pr) return;
+  await ensureRefs();
+  navigate("cotizacion");
+  await loadCotizacion();
+  // Asegura el modo cotización (no venta directa).
+  if (cotizMode !== "quote")
+    document.querySelector('#cotiz-mode button[data-cmode="quote"]')?.click();
+  allItems().forEach((i) => i.remove());
+
+  for (const p of pr.parts) {
+    const item = addItem();
+    const bed = Math.max(1, p.pieces_per_bed || 1);
+    item.querySelector(".q-desc").value =
+      (p.gcode_filename || "").split("/").pop() || (p.material_type || "parte");
+    const typeSel = item.querySelector(".q-type");
+    const t = p.dominant_type || p.material_type || "";
+    if (t && ![...typeSel.options].some((o) => o.value === t)) typeSel.add(new Option(t, t));
+    if (t) typeSel.value = t;
+    item.querySelector(".q-qty2").value = p.quantity || 1;
+    // Por PIEZA: la cama con varias piezas reparte peso y tiempo.
+    item.querySelector('[data-f="masa"]').value = ((p.weight_g || 0) / 1000 / bed).toFixed(3);
+    item.querySelector('[data-f="kg"]').value = p.price_per_kg || 0;
+    item.querySelector('[data-f="tiempo"]').value = ((p.print_time_s || 0) / 3600 / bed).toFixed(2);
+    if (p.printer_id) {
+      item.querySelector(".q-printer2").value = p.printer_id;
+      loadItemDefaults(item);   // consumo y amortización de ESA impresora
+    }
+    if (p.gcode_filename) {
+      urlToDataUri(`/api/gcode-thumbnail?filename=${encodeURIComponent(p.gcode_filename)}`)
+        .then((uri) => { if (uri) setItemThumb(item, uri); }).catch(() => {});
+    }
+  }
+  // Gastos extra incluidos → precio directo (sin margen), como en Estimación.
+  (pr.extra_expenses || []).filter((e) => e.included !== false).forEach((e) => {
+    const m = addManualItem();
+    m.querySelector(".qm-desc").value = e.label || "extra";
+    m.querySelector(".qm-price").value = e.amount || 0;
+    m.querySelector(".qm-qty").value = e.quantity || 1;
+  });
+  recalcQuote();
+  toast(`Proyecto “${pr.name}” cargado en Cotización`);
 }
 
 function projTypeOptions(sel) {

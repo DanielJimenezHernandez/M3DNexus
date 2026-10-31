@@ -10,6 +10,7 @@ De ahí extraemos: nombre completo (clave única), marca, tipo y color.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -35,11 +36,26 @@ def density_for(material_type: str | None) -> float:
     return DENSITY_BY_TYPE.get(key, DEFAULT_FILAMENT_DENSITY)
 
 
+def _as_list_str(raw) -> str:
+    """Normaliza un campo que puede venir como lista JSON ('["A","B"]') a la
+    forma clásica separada por ';'. Algunos firmwares/laminadores mandan la
+    lista JSON tal cual y el '[' acababa dentro del nombre del material."""
+    s = str(raw).strip()
+    if s.startswith("["):
+        try:
+            val = json.loads(s)
+            if isinstance(val, list):
+                return ";".join(str(v) for v in val)
+        except (ValueError, TypeError):
+            return s.lstrip("[").rstrip("]")
+    return s
+
+
 def _first_value(raw) -> str:
     """Primer valor de un campo que puede venir como lista ';' con comillas."""
     if not raw:
         return ""
-    return str(raw).split(";")[0].strip().strip('"').strip()
+    return _as_list_str(raw).split(";")[0].strip().strip('"').strip()
 
 
 @dataclass
@@ -139,9 +155,9 @@ def parse_all_filaments(metadata: dict | None, filament_type=None) -> list[Parse
     raw = (metadata or {}).get("filament_name")
     if not raw:
         return []
-    names = [n.strip().strip('"').strip() for n in str(raw).split(";")]
+    names = [n.strip().strip('"').strip() for n in _as_list_str(raw).split(";")]
     types_raw = filament_type or (metadata or {}).get("filament_type") or ""
-    types = [t.strip().strip('"').strip() for t in str(types_raw).split(";")]
+    types = [t.strip().strip('"').strip() for t in _as_list_str(types_raw).split(";")]
 
     out: list[ParsedFilament] = []
     seen: set[str] = set()

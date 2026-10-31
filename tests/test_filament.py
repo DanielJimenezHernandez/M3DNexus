@@ -105,3 +105,23 @@ def test_sufijo_de_impresora_sin_espacio_tras_la_arroba():
     # Y se sigue quitando con espacios a ambos lados, como antes.
     p = parse_filament("Elegoo PLA White @ Hi 0.4 Nozzle", "PLA")
     assert p.full_name == "Elegoo PLA White"
+
+
+def test_lista_json_de_filamentos():
+    """Algunos laminadores mandan filament_name como lista JSON.
+
+    El '[' se colaba en el nombre y creaba materiales duplicados tipo
+    '["Elegoo PLA Sea Green'. La lista JSON se trata igual que la de ';'.
+    """
+    p = parse_filament('["Elegoo PLA Sea Green", "Creality Hyper PLA Green"]',
+                       '["PLA", "PLA"]')
+    assert p.full_name == "Elegoo PLA Sea Green"
+    assert p.brand == "Elegoo" and p.material_type == "PLA"
+
+    # Un solo elemento, con sufijo de impresora dentro.
+    p = parse_filament('["Elegoo Matte PLA Sakura Pink @K1SE 0.4 Nozzle"]', None)
+    assert p.full_name == "Elegoo Matte PLA Sakura Pink"
+
+    # JSON malformado: al menos no deja el corchete dentro.
+    p = parse_filament('["Elegoo PLA Sea Green', "PLA")
+    assert not p.full_name.startswith("[")

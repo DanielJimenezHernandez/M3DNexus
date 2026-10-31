@@ -373,7 +373,7 @@ function jobDetailHTML(j, pmap, mById) {
           <span class="muted">cambio de color medido a mano — se suma al filamento cobrado</span></span>`) : ""}
         ${drow("Material", j.is_multicolor
           ? '<span class="pill multicolor">multimaterial — el peso del slicer no incluye purgas</span> <span class="muted">(selectores abajo)</span>'
-          : `<select class="mat-select" data-job="${j.id}">${estMatOptions(j.material_id)}</select>`)}
+          : `${jobMatButton(j, mById)} <span class="muted">clic para elegir con filtros</span>`)}
         ${drow("Energía", energia)}
         ${drow("Tarifa luz", `${money(j.tariff_per_kwh)}/kWh`)}
         ${drow("Coste luz", money(j.cost_energy))}
@@ -570,15 +570,13 @@ function renderJobsTable(rows, pmap, mById) {
     fillGcodeFilPanel(container, j);
   };
 
-  // Mono-material: el selector de la fila Material asigna directamente.
+  // Mono-material: el botón de la fila Material abre el modal con filtros
+  // por tipo/marca/color y búsqueda (mismo picker que la columna de la tabla).
   const wireMonoSelect = (container) => {
-    const sel = container.querySelector(".mat-select");
-    if (!sel) return;
-    sel.addEventListener("change", async () => {
-      await api.send(`/api/jobs/${sel.dataset.job}/assign-material`, "POST",
-        { material_id: sel.value ? +sel.value : null });
-      toast("Material asignado"); loadJobs();   // el detalle abierto se conserva
-    });
+    const btn = container.querySelector(".mat-pick-btn");
+    if (!btn) return;
+    btn.addEventListener("click", () => openMaterialPicker(
+      +btn.dataset.pickOpen, btn.dataset.current ? +btn.dataset.current : null));
   };
 
   // Purga (multimaterial): guardar al cambiar recalcula el coste del job.

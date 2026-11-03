@@ -4920,20 +4920,53 @@ document.getElementById("pos-search").addEventListener("input", (e) => {
   });
 });
 
-// Escáner de QR con la cámara (BarcodeDetector nativo).
+// Escáner de QR con la cámara. Motor: BarcodeDetector nativo (Android Chrome)
+// o jsQR vendoreado como respaldo (iOS Safari no implementa la API nativa);
+// jsQR se carga perezoso solo si hace falta. FLUJO: cada escaneo lo pide el
+// usuario con el botón, y al leer un producto el escáner SE CIERRA solo.
+let jsQRLoader = null;
+function ensureJsQR() {
+  if (window.jsQR) return Promise.resolve();
+  if (!jsQRLoader) jsQRLoader = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "/vendor/jsQR.min.js";
+    s.onload = res;
+    s.onerror = () => { jsQRLoader = null; rej(new Error("no se pudo cargar el lector")); };
+    document.head.appendChild(s);
+  });
+  return jsQRLoader;
+}
+
+// Devuelve true si el código cerró el escáner (producto sumado al carrito).
+function posHandleCode(raw) {
+  const sku = (raw || "").trim();
+  if (!sku) return false;
+  const p = productos.find((x) => (x.sku || "").toLowerCase() === sku.toLowerCase());
+  if (p) {
+    posStopScan();            // una lectura por botón: se cierra al encontrar
+    posAdd(p, true);
+    toast(`+1 ${p.name}`);
+    return true;
+  }
+  const st = document.getElementById("pos-scan-status");
+  if (st) st.textContent = `“${sku}” no está en el catálogo`;
+  return false;
+}
+
 async function posStartScan() {
   if (!window.isSecureContext) {
     toast("La cámara requiere HTTPS — usa el buscador, o configura un certificado en el proxy");
     return;
   }
-  if (!("BarcodeDetector" in window)) {
-    toast("Este navegador no soporta el escáner; usa el buscador");
-    return;
+  const nativo = "BarcodeDetector" in window;
+  if (!nativo) {
+    try { await ensureJsQR(); }
+    catch { toast("Este navegador no soporta el escáner; usa el buscador"); return; }
   }
   const ov = document.getElementById("pos-scanner");
   ov.innerHTML = `<div class="modal-box pos-scanbox">
     <div class="mp-top"><strong>Escanea la etiqueta</strong>
-      <span class="muted" id="pos-scan-status">buscando…</span>
+      <span class="muted" id="pos-scan-status">apunta al QR…</span>
       <span class="spacer"></span>
       <button class="btn ghost small" id="pos-scan-close">✕</button></div>
     <video id="pos-video" playsinline autoplay muted></video>
@@ -4949,26 +4982,31 @@ async function posStartScan() {
     return;
   }
   video.srcObject = posStream;
-  const detector = new BarcodeDetector({ formats: ["qr_code"] });
-  const seen = new Map();   // anti-rebote: el mismo QR no suma 2 veces seguidas
-  posScanTimer = setInterval(async () => {
-    if (!video.videoWidth) return;
-    let codes = [];
-    try { codes = await detector.detect(video); } catch { return; }
-    for (const c of codes) {
-      const sku = (c.rawValue || "").trim();
-      if (!sku || (seen.get(sku) || 0) > Date.now() - 1500) continue;
-      seen.set(sku, Date.now());
-      const p = productos.find((x) => (x.sku || "").toLowerCase() === sku.toLowerCase());
-      const st = document.getElementById("pos-scan-status");
-      if (p) {
-        posAdd(p, true);
-        if (st) st.textContent = `+1 ${p.name}`;
-      } else if (st) {
-        st.textContent = `SKU ${sku} no está en el catálogo`;
-      }
-    }
-  }, 250);
+  try { await video.play(); } catch { /* iOS a veces lo rechaza; autoplay lo cubre */ }
+
+  if (nativo) {
+    const detector = new BarcodeDetector({ formats: ["qr_code"] });
+    posScanTimer = setInterval(async () => {
+      if (!video.videoWidth) return;
+      let codes = [];
+      try { codes = await detector.detect(video); } catch { return; }
+      for (const c of codes) if (posHandleCode(c.rawValue)) return;
+    }, 250);
+  } else {
+    // jsQR: se dibuja el frame en un canvas reducido y se decodifica.
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    posScanTimer = setInterval(() => {
+      if (!video.videoWidth) return;
+      const w = 480;
+      const h = Math.round(video.videoHeight / video.videoWidth * w);
+      canvas.width = w; canvas.height = h;
+      ctx.drawImage(video, 0, 0, w, h);
+      const img = ctx.getImageData(0, 0, w, h);
+      const code = window.jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
+      if (code) posHandleCode(code.data);
+    }, 300);
+  }
   ov.querySelector("#pos-scan-close").onclick = posStopScan;
   ov.onclick = (e) => { if (e.target === ov) posStopScan(); };
 }

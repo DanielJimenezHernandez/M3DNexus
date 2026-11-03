@@ -447,6 +447,26 @@ class Product(Base):
     project: Mapped["Project | None"] = relationship()
 
 
+class Sale(Base):
+    """Venta de mostrador (bazar / punto de venta).
+
+    Las líneas van como JSON con los datos CONGELADOS al momento de cobrar
+    ({product_id, sku, name, price, qty}): si luego cambias el precio del
+    producto, la venta histórica no se mueve. Cobrar descuenta stock; borrar
+    la venta lo devuelve.
+    """
+
+    __tablename__ = "sales"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    event: Mapped[str | None] = mapped_column(String, nullable=True)   # bazar
+    payment_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    items: Mapped[list] = mapped_column(JSON, default=list)
+    total: Mapped[float] = mapped_column(Float, default=0.0)
+    currency: Mapped[str] = mapped_column(String, default="€")
+
+
 class BusinessExpense(Base):
     """Gasto del negocio (contabilidad): saber en qué se va el dinero.
 

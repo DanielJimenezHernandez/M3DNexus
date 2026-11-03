@@ -326,6 +326,21 @@ class ProductIn(BaseModel):
     notes: str | None = None
 
 
+class SaleItemIn(BaseModel):
+    """Línea de venta: un producto del catálogo o una línea manual."""
+
+    product_id: int | None = None
+    name: str | None = None          # para líneas manuales sin producto
+    price: float | None = Field(default=None, ge=0)  # None = precio del catálogo
+    qty: int = Field(default=1, ge=1)
+
+
+class SaleIn(BaseModel):
+    items: list[SaleItemIn]
+    payment_method: str | None = None   # efectivo | tarjeta | transferencia | otro
+    event: str | None = None            # nombre del bazar / evento
+
+
 class BusinessExpenseIn(BaseModel):
     """Gasto general del negocio (no confundir con ExpenseIn, el de pedidos)."""
 

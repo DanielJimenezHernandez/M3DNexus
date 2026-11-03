@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — gestión de impresión 3D</title>
-  <link rel="stylesheet" href="/style.css?v=125" />
+  <link rel="stylesheet" href="/style.css?v=126" />
 </head>
 <body>
   <!-- Panel lateral colapsable. Los botones conservan data-tab: es la clave que
@@ -21,6 +21,7 @@
       <button data-tab="pedidos">Trabajos</button>
       <button data-tab="gastos">Gastos</button>
       <button data-tab="productos">Productos</button>
+      <button data-tab="pos">Punto de venta</button>
       <button data-tab="jobs">Impresiones</button>
       <button data-tab="printers">Impresoras</button>
       <button data-tab="materials">Materiales</button>
@@ -66,6 +67,23 @@
       </div>
       <div id="product-form-host"></div>
       <div id="products-grid" class="prod-grid"></div>
+    </section>
+
+    <!-- Punto de venta (bazar): escanear QR, carrito y cobro -->
+    <section id="pos" class="tab">
+      <div class="toolbar">
+        <h2 style="margin:0">Punto de venta</h2>
+        <input id="pos-event" placeholder="Evento / bazar (opcional)" style="max-width:220px">
+        <span class="spacer"></span>
+        <button class="btn" id="pos-scan-btn">📷 Escanear</button>
+      </div>
+      <div class="pos-search-wrap">
+        <input type="search" id="pos-search" placeholder="Buscar producto por nombre o SKU…" autocomplete="off">
+        <div id="pos-results" hidden></div>
+      </div>
+      <div id="pos-cart" class="card"></div>
+      <div id="pos-today"></div>
+      <div id="pos-scanner" class="modal-ov" hidden></div>
     </section>
 
     <!-- Gastos del negocio (contabilidad / rentabilidad) -->
@@ -383,6 +401,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/vendor/qrcode.min.js"></script>
-  <script src="/app.js?v=125"></script>
+  <script src="/app.js?v=126"></script>
 </body>
 </html>

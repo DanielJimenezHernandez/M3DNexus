@@ -158,6 +158,43 @@ textarea { resize: vertical; font-family: inherit; }
 #ped-monthly { margin-bottom: 1rem; }
 .monthly-table { width: 100%; }
 .monthly-table tr.grand td { border-top: 2px solid var(--border); }
+/* Punto de venta (bazar): dedos, no ratón. */
+.pos-search-wrap { position: relative; margin-bottom: 0.8rem; }
+#pos-search { width: 100%; font-size: 1.05rem; padding: 0.6rem 0.8rem; }
+#pos-results { position: absolute; left: 0; right: 0; top: 100%; z-index: 40;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+.pos-hit { display: flex; align-items: center; gap: 0.6rem; width: 100%;
+  padding: 0.55rem 0.7rem; background: none; border: 0; border-bottom: 1px solid var(--border);
+  color: var(--text); text-align: left; cursor: pointer; font-size: 0.95rem; }
+.pos-hit:hover { background: var(--panel-2); }
+.pos-hit img, .pos-hit-ph { width: 38px; height: 38px; border-radius: 6px;
+  object-fit: cover; background: var(--panel-2); flex-shrink: 0; }
+.pos-hit span:nth-child(2) { flex: 1; min-width: 0; }
+.pos-line { display: flex; align-items: center; gap: 0.55rem;
+  padding: 0.45rem 0; border-bottom: 1px solid var(--border); }
+.pos-lname { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pos-lname .muted { font-size: 0.75rem; }
+.pos-lprice { width: 84px; text-align: right; }
+.pos-qtywrap { display: flex; align-items: center; gap: 0.45rem; }
+.pos-qtywrap .btn { min-width: 2.2rem; font-size: 1.1rem; }
+.pos-lsum { min-width: 86px; text-align: right; font-variant-numeric: tabular-nums; }
+.pos-footer { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;
+  padding-top: 0.7rem; }
+.pos-total { font-size: 1.5rem; font-weight: 800; color: var(--good);
+  font-variant-numeric: tabular-nums; }
+.pos-charge { font-size: 1.1rem; padding: 0.65rem 1.6rem; }
+.pos-sale { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border); font-size: 0.88rem; }
+.pos-sitems { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.pos-scanbox { max-width: 520px; width: 94vw; }
+#pos-video { width: 100%; border-radius: 10px; margin-top: 0.5rem; }
+@media (max-width: 700px) {
+  .pos-line { flex-wrap: wrap; }
+  .pos-lsum { margin-left: auto; }
+  .pos-charge { flex: 1; }
+}
 /* Catálogo de productos. */
 .prod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
   gap: 0.8rem; }

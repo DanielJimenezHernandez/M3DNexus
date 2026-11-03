@@ -62,7 +62,7 @@ let currentTab = "dashboard";
 // servidor devuelve el index para estas rutas, y aquí se resuelve cuál abrir.
 const TAB_ROUTES = {
   dashboard: "dashboard", pedidos: "trabajos", gastos: "gastos",
-  productos: "productos", jobs: "impresiones",
+  productos: "productos", pos: "pos", jobs: "impresiones",
   printers: "impresoras", materials: "materiales", calibracion: "calibracion",
   quote: "estimacion", cotizacion: "cotizacion", settings: "ajustes",
 };
@@ -150,7 +150,7 @@ async function goToJobsForGcode(gcodeFilename) {
 
 function loadTab(name) {
   ({ dashboard: loadDashboard, pedidos: () => setPedMode(projMode), gastos: loadGastos,
-     productos: loadProductos,
+     productos: loadProductos, pos: loadPOS,
      jobs: loadJobs,
      printers: loadPrinters, materials: loadMaterials, calibracion: loadCalibracion,
      quote: loadEstimacion, cotizacion: loadCotizacion, settings: loadSettings })[name]?.();
@@ -4769,6 +4769,219 @@ document.getElementById("pr-search").addEventListener("input", renderProductos);
 document.getElementById("pr-cat").addEventListener("change", renderProductos);
 document.getElementById("pr-inactive").addEventListener("change", renderProductos);
 
+// --- Punto de venta (bazar) ---------------------------------------------------
+// Escanea el QR de la etiqueta (SKU) con la cámara, arma el carrito y cobra.
+// La cámara usa la API nativa BarcodeDetector (Chrome/Android) y requiere
+// HTTPS; sin cámara siempre queda el buscador por nombre/SKU.
+let posCart = [];        // [{product_id, sku, name, price, qty, stock}]
+let posSales = [];
+let posStream = null;
+let posScanTimer = null;
+const POS_PAY = { efectivo: "Efectivo", tarjeta: "Tarjeta", transferencia: "Transferencia" };
+let posPayMethod = "efectivo";
+
+async function loadPOS() {
+  await ensureRefs();
+  if (!productos.length) {
+    try { productos = await api.get("/api/products"); } catch { productos = []; }
+  }
+  document.getElementById("pos-event").value = localStorage.getItem("posEvent") || "";
+  try { posSales = await api.get("/api/sales?limit=100"); } catch { posSales = []; }
+  renderPosCart();
+  renderPosToday();
+}
+
+function posAdd(p, viaScan = false) {
+  if (!p) return;
+  const line = posCart.find((l) => l.product_id === p.id);
+  if (line) line.qty += 1;
+  else posCart.push({ product_id: p.id, sku: p.sku, name: p.name,
+                      price: p.price || 0, qty: 1, stock: p.stock });
+  if (viaScan && navigator.vibrate) navigator.vibrate(60);
+  renderPosCart();
+}
+
+function renderPosCart() {
+  const host = document.getElementById("pos-cart");
+  const cur = currency;
+  const total = posCart.reduce((a, l) => a + l.price * l.qty, 0);
+  const lines = posCart.map((l, i) => `<div class="pos-line">
+      <span class="pos-lname">${escHtml(l.name)}
+        <span class="muted">${escHtml(l.sku || "")}${l.stock != null && l.stock < l.qty ? ' · <span class="profit-neg">stock insuficiente</span>' : ""}</span></span>
+      <input type="number" step="0.01" min="0" class="pos-lprice" data-i="${i}" value="${l.price}" title="Precio (editable si regateaste)">
+      <span class="pos-qtywrap">
+        <button class="btn ghost small pos-minus" data-i="${i}">−</button>
+        <strong>${l.qty}</strong>
+        <button class="btn ghost small pos-plus" data-i="${i}">+</button>
+      </span>
+      <strong class="pos-lsum">${money2(l.price * l.qty, cur)}</strong>
+      <button class="btn danger small pos-del" data-i="${i}">✕</button>
+    </div>`).join("");
+  host.innerHTML = `
+    ${lines || `<p class="muted" style="margin:.3rem 0">Carrito vacío: escanea un QR o busca un producto.</p>`}
+    <div class="pos-footer">
+      <div class="seg pos-pay">${Object.entries(POS_PAY).map(([k, v]) =>
+        `<button class="${k === posPayMethod ? "active" : ""}" data-pay="${k}">${v}</button>`).join("")}</div>
+      <span class="spacer"></span>
+      <span class="pos-total">${money2(total, cur)}</span>
+      <button class="btn pos-charge" id="pos-charge" ${posCart.length ? "" : "disabled"}>Cobrar</button>
+    </div>`;
+  host.querySelectorAll(".pos-minus").forEach((b) => b.onclick = () => {
+    const l = posCart[+b.dataset.i];
+    if (l.qty > 1) l.qty -= 1; else posCart.splice(+b.dataset.i, 1);
+    renderPosCart();
+  });
+  host.querySelectorAll(".pos-plus").forEach((b) => b.onclick = () => {
+    posCart[+b.dataset.i].qty += 1; renderPosCart();
+  });
+  host.querySelectorAll(".pos-del").forEach((b) => b.onclick = () => {
+    posCart.splice(+b.dataset.i, 1); renderPosCart();
+  });
+  host.querySelectorAll(".pos-lprice").forEach((inp) => inp.addEventListener("change", () => {
+    posCart[+inp.dataset.i].price = Math.max(0, parseFloat(inp.value) || 0);
+    renderPosCart();
+  }));
+  host.querySelectorAll("[data-pay]").forEach((b) => b.onclick = () => {
+    posPayMethod = b.dataset.pay; renderPosCart();
+  });
+  const charge = host.querySelector("#pos-charge");
+  if (charge) charge.onclick = posCharge;
+}
+
+async function posCharge() {
+  if (!posCart.length) return;
+  const event = document.getElementById("pos-event").value.trim();
+  localStorage.setItem("posEvent", event);
+  try {
+    const sale = await api.send("/api/sales", "POST", {
+      items: posCart.map((l) => ({ product_id: l.product_id, price: l.price, qty: l.qty })),
+      payment_method: posPayMethod,
+      event: event || null,
+    });
+    posCart = [];
+    if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
+    toast(`Cobrado ${money2(sale.total, sale.currency)} ✔`);
+    productos = await api.get("/api/products");   // stock actualizado
+    posSales = await api.get("/api/sales?limit=100");
+    renderPosCart(); renderPosToday();
+  } catch (e) { toast("Error: " + e.message); }
+}
+
+function renderPosToday() {
+  const host = document.getElementById("pos-today");
+  const today = new Date().toDateString();
+  const rows = posSales.filter((s) => new Date(s.created_at).toDateString() === today);
+  const total = rows.reduce((a, s) => a + (s.total || 0), 0);
+  const piezas = rows.reduce((a, s) => a + (s.items || []).reduce((x, l) => x + (l.qty || 0), 0), 0);
+  host.innerHTML = `<div class="card" style="margin-top:.8rem">
+    <div class="toolbar" style="margin-bottom:.3rem">
+      <strong>Ventas de hoy</strong>
+      <span class="muted">${rows.length} cobros · ${piezas} piezas</span>
+      <span class="spacer"></span>
+      <strong class="profit-pos">${money2(total, currency)}</strong>
+    </div>
+    ${rows.map((s) => `<div class="pos-sale">
+      <span class="muted">${new Date(s.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+      <span class="pos-sitems">${(s.items || []).map((l) => `${l.qty}× ${escHtml(l.name)}`).join(", ")}</span>
+      <span class="muted">${POS_PAY[s.payment_method] || s.payment_method || ""}</span>
+      <strong>${money2(s.total, s.currency || currency)}</strong>
+      <button class="btn danger small" data-undo-sale="${s.id}" title="Deshacer (devuelve el stock)">✕</button>
+    </div>`).join("") || `<p class="muted">Aún nada hoy.</p>`}
+  </div>`;
+  host.querySelectorAll("[data-undo-sale]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (!confirm("¿Deshacer esta venta? El stock se devuelve.")) return;
+      await api.send(`/api/sales/${b.dataset.undoSale}`, "DELETE");
+      toast("Venta deshecha");
+      productos = await api.get("/api/products");
+      posSales = await api.get("/api/sales?limit=100");
+      renderPosToday();
+    }));
+}
+
+// Buscador manual (fallback universal del escáner).
+document.getElementById("pos-search").addEventListener("input", (e) => {
+  const q = e.target.value.toLowerCase().trim();
+  const box = document.getElementById("pos-results");
+  if (!q) { box.hidden = true; return; }
+  const hits = productos.filter((p) => p.active
+    && `${p.name} ${p.sku || ""} ${p.category || ""}`.toLowerCase().includes(q)).slice(0, 8);
+  box.innerHTML = hits.length ? hits.map((p) => `<button class="pos-hit" data-id="${p.id}">
+      ${p.photo_url ? `<img src="${p.photo_url}" alt="">` : `<span class="pos-hit-ph"></span>`}
+      <span>${escHtml(p.name)} <span class="muted">${escHtml(p.sku || "")} · stock ${p.stock}</span></span>
+      <strong>${money2(p.price, currency)}</strong>
+    </button>`).join("") : `<p class="muted" style="padding:.4rem">Sin resultados.</p>`;
+  box.hidden = false;
+  box.querySelectorAll(".pos-hit").forEach((b) => b.onclick = () => {
+    posAdd(productos.find((p) => p.id == b.dataset.id));
+    box.hidden = true;
+    e.target.value = "";
+    e.target.focus();
+  });
+});
+
+// Escáner de QR con la cámara (BarcodeDetector nativo).
+async function posStartScan() {
+  if (!window.isSecureContext) {
+    toast("La cámara requiere HTTPS — usa el buscador, o configura un certificado en el proxy");
+    return;
+  }
+  if (!("BarcodeDetector" in window)) {
+    toast("Este navegador no soporta el escáner; usa el buscador");
+    return;
+  }
+  const ov = document.getElementById("pos-scanner");
+  ov.innerHTML = `<div class="modal-box pos-scanbox">
+    <div class="mp-top"><strong>Escanea la etiqueta</strong>
+      <span class="muted" id="pos-scan-status">buscando…</span>
+      <span class="spacer"></span>
+      <button class="btn ghost small" id="pos-scan-close">✕</button></div>
+    <video id="pos-video" playsinline autoplay muted></video>
+  </div>`;
+  ov.hidden = false;
+  const video = ov.querySelector("#pos-video");
+  try {
+    posStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }, audio: false });
+  } catch (err) {
+    posStopScan();
+    toast("No se pudo abrir la cámara: " + err.message);
+    return;
+  }
+  video.srcObject = posStream;
+  const detector = new BarcodeDetector({ formats: ["qr_code"] });
+  const seen = new Map();   // anti-rebote: el mismo QR no suma 2 veces seguidas
+  posScanTimer = setInterval(async () => {
+    if (!video.videoWidth) return;
+    let codes = [];
+    try { codes = await detector.detect(video); } catch { return; }
+    for (const c of codes) {
+      const sku = (c.rawValue || "").trim();
+      if (!sku || (seen.get(sku) || 0) > Date.now() - 1500) continue;
+      seen.set(sku, Date.now());
+      const p = productos.find((x) => (x.sku || "").toLowerCase() === sku.toLowerCase());
+      const st = document.getElementById("pos-scan-status");
+      if (p) {
+        posAdd(p, true);
+        if (st) st.textContent = `+1 ${p.name}`;
+      } else if (st) {
+        st.textContent = `SKU ${sku} no está en el catálogo`;
+      }
+    }
+  }, 250);
+  ov.querySelector("#pos-scan-close").onclick = posStopScan;
+  ov.onclick = (e) => { if (e.target === ov) posStopScan(); };
+}
+
+function posStopScan() {
+  if (posScanTimer) { clearInterval(posScanTimer); posScanTimer = null; }
+  if (posStream) { posStream.getTracks().forEach((t) => t.stop()); posStream = null; }
+  const ov = document.getElementById("pos-scanner");
+  ov.hidden = true; ov.innerHTML = "";
+}
+
+document.getElementById("pos-scan-btn").addEventListener("click", posStartScan);
+
 // --- Gastos del negocio (contabilidad / rentabilidad) ------------------------
 // Distintos de los "gastos extra" de un pedido: esto es el gasto general del
 // taller. La foto del recibo reutiliza la galería de entidad (type "expense").
@@ -4816,11 +5029,12 @@ function renderGastos() {
   const yearExp = d.months.filter((m) => m.month.startsWith(yearPrefix))
     .reduce((a, m) => a + m.expenses, 0);
 
-  // Tarjetas del mes en curso + acumulado del año.
+  // Tarjetas del mes en curso + acumulado del año (ingresos = pedidos + bazar).
+  const incomeOf = (m) => (m?.income || 0) + (m?.sales || 0);
   const cards = [
     ["Gastos este mes", money2(mNow?.expenses || 0, cur)],
-    ["Ingresos este mes", money2(mNow?.income || 0, cur)],
-    ["Utilidad este mes", money2((mNow?.income || 0) - (mNow?.expenses || 0), cur)],
+    ["Ingresos este mes", money2(incomeOf(mNow), cur)],
+    ["Utilidad este mes", money2(incomeOf(mNow) - (mNow?.expenses || 0), cur)],
     [`Gastos ${nowKey.slice(0, 4)}`, money2(yearExp, cur)],
   ];
   document.getElementById("gx-cards").innerHTML = cards
@@ -4834,8 +5048,8 @@ function renderGastos() {
     : d.by_category;
   const segs = Object.entries(pieSrc).map(([label, value], i) =>
     ({ label, value, color: GX_PIE_COLORS[i % GX_PIE_COLORS.length] }));
-  const margin = (m) => m.income > 0
-    ? `${Math.round((m.income - m.expenses) / m.income * 100)}%` : "—";
+  const margin = (m) => incomeOf(m) > 0
+    ? `${Math.round(m.profit / incomeOf(m) * 100)}%` : "—";
   document.getElementById("gx-summary").innerHTML = `<div class="card gx-grid">
     <div>
       <strong>Rentabilidad por mes</strong>
@@ -4844,7 +5058,7 @@ function renderGastos() {
             <th class="num">Utilidad</th><th class="num">Margen</th></tr>
         ${d.months.map((m) => `<tr>
           <td>${escHtml(gxMonthName(m.month))}</td>
-          <td class="num">${money2(m.income, cur)}</td>
+          <td class="num" title="pedidos ${money2(m.income, cur)}${m.sales ? " + bazar " + money2(m.sales, cur) : ""}">${money2(incomeOf(m), cur)}</td>
           <td class="num">${money2(m.expenses, cur)}</td>
           <td class="num"><strong class="${m.profit >= 0 ? "profit-pos" : "profit-neg"}">${money2(m.profit, cur)}</strong></td>
           <td class="num">${margin(m)}</td>

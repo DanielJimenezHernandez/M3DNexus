@@ -91,3 +91,43 @@ def test_fotos_de_producto(env):
     env.delete(f"/api/products/{p['id']}")
     assert env.get(
         f"/api/entity-photos?entity_type=product&entity_id={p['id']}").json() == []
+
+
+def test_venta_descuenta_stock_y_congela_lineas(env):
+    p = env.post("/api/products", json={"name": "Llavero", "price": 80,
+                                        "stock": 5}).json()
+    r = env.post("/api/sales", json={
+        "items": [{"product_id": p["id"], "qty": 2},
+                  {"name": "Moño de regalo", "price": 10, "qty": 1}],
+        "payment_method": "efectivo", "event": "Bazar Nov"})
+    assert r.status_code == 201
+    s = r.json()
+    assert s["total"] == 170.0                   # 2×80 + 10
+    assert s["event"] == "Bazar Nov"
+    assert s["items"][0]["sku"] == p["sku"]      # línea congelada con SKU
+    assert s["items"][1]["product_id"] is None   # línea manual
+    # Stock descontado.
+    assert env.get(f"/api/products/by-sku/{p['sku']}").json()["stock"] == 3
+    # Precio regateado por línea gana sobre el del catálogo.
+    s2 = env.post("/api/sales", json={
+        "items": [{"product_id": p["id"], "qty": 1, "price": 70}]}).json()
+    assert s2["total"] == 70.0
+    # Deshacer la primera venta devuelve su stock (3 + 2 = 5... menos la 2ª).
+    env.delete(f"/api/sales/{s['id']}")
+    assert env.get(f"/api/products/by-sku/{p['sku']}").json()["stock"] == 4
+    # Venta vacía no pasa; producto inexistente tampoco.
+    assert env.post("/api/sales", json={"items": []}).status_code == 422
+    assert env.post("/api/sales", json={
+        "items": [{"product_id": 999, "qty": 1}]}).status_code == 404
+
+
+def test_ventas_entran_a_la_rentabilidad(env):
+    p = env.post("/api/products", json={"name": "Figura", "price": 100,
+                                        "stock": 10}).json()
+    env.post("/api/sales", json={"items": [{"product_id": p["id"], "qty": 3}]})
+    d = env.get("/api/expenses/summary").json()
+    import datetime as _dt
+    key = _dt.datetime.now().strftime("%Y-%m")
+    m = next(x for x in d["months"] if x["month"] == key)
+    assert m["sales"] == 300.0
+    assert m["profit"] == m["income"] + 300.0 - m["expenses"]

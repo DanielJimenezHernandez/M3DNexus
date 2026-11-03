@@ -39,6 +39,7 @@ from ..models import (
     BusinessExpense,
     Material,
     Product,
+    Sale,
     Order,
     OrderItem,
     PrintJob,
@@ -51,6 +52,7 @@ from ..schemas import (
     AssignMaterialIn,
     BusinessExpenseIn,
     ProductIn,
+    SaleIn,
     JobOut,
     MaterialIn,
     MaterialOut,
@@ -1163,6 +1165,70 @@ def delete_product(product_id: int, db: Session = Depends(get_session)):
 
 
 # --------------------------------------------------------------------------- #
+# Ventas de mostrador (bazar / punto de venta)
+# --------------------------------------------------------------------------- #
+def _sale_dict(s_: Sale) -> dict:
+    return {
+        "id": s_.id, "created_at": s_.created_at, "event": s_.event,
+        "payment_method": s_.payment_method, "items": s_.items or [],
+        "total": s_.total, "currency": s_.currency,
+    }
+
+
+@router.get("/sales")
+def list_sales(limit: int = 100, db: Session = Depends(get_session)):
+    rows = db.scalars(
+        select(Sale).order_by(Sale.created_at.desc()).limit(max(1, min(limit, 500)))
+    ).all()
+    return [_sale_dict(s_) for s_ in rows]
+
+
+@router.post("/sales", status_code=201)
+def create_sale(data: SaleIn, db: Session = Depends(get_session)):
+    """Cobra una venta: congela las líneas, suma el total y descuenta stock."""
+    if not data.items:
+        raise HTTPException(422, "La venta necesita al menos una línea")
+    lines, total = [], 0.0
+    for it in data.items:
+        prod = db.get(Product, it.product_id) if it.product_id else None
+        if it.product_id and not prod:
+            raise HTTPException(404, f"Producto {it.product_id} no encontrado")
+        price = it.price if it.price is not None else (prod.price if prod else 0.0)
+        name = (it.name or "").strip() or (prod.name if prod else "Producto")
+        lines.append({
+            "product_id": prod.id if prod else None,
+            "sku": prod.sku if prod else None,
+            "name": name, "price": round(price, 2), "qty": it.qty,
+        })
+        total += price * it.qty
+        if prod:
+            prod.stock = max(0, (prod.stock or 0) - it.qty)
+    sale = Sale(event=(data.event or "").strip() or None,
+                payment_method=data.payment_method,
+                items=lines, total=round(total, 2),
+                currency=get_settings(db)[1])
+    db.add(sale)
+    db.commit()
+    db.refresh(sale)
+    return _sale_dict(sale)
+
+
+@router.delete("/sales/{sale_id}", status_code=204)
+def delete_sale(sale_id: int, db: Session = Depends(get_session)):
+    """Deshace una venta (cobro equivocado): devuelve el stock descontado."""
+    sale = db.get(Sale, sale_id)
+    if not sale:
+        return
+    for line in sale.items or []:
+        if line.get("product_id"):
+            prod = db.get(Product, line["product_id"])
+            if prod:
+                prod.stock = (prod.stock or 0) + (line.get("qty") or 0)
+    db.delete(sale)
+    db.commit()
+
+
+# --------------------------------------------------------------------------- #
 # Gastos del negocio (contabilidad / rentabilidad)
 # --------------------------------------------------------------------------- #
 def _expense_dict(x: BusinessExpense, db: Session) -> dict:
@@ -1192,7 +1258,7 @@ def expenses_summary(db: Session = Depends(get_session)):
     def month_row(key: str) -> dict:
         return months.setdefault(key, {
             "month": key, "expenses": 0.0, "invoiced_expenses": 0.0,
-            "income": 0.0, "by_category": {},
+            "income": 0.0, "sales": 0.0, "by_category": {},
         })
 
     by_category: dict[str, float] = {}
@@ -1214,12 +1280,18 @@ def expenses_summary(db: Session = Depends(get_session)):
         key = o.created_at.strftime("%Y-%m") if o.created_at else "sin-fecha"
         month_row(key)["income"] += o.agreed_price
 
+    # Ventas de mostrador (bazar): también son ingresos del mes.
+    for s_ in db.scalars(select(Sale)).all():
+        key = s_.created_at.strftime("%Y-%m") if s_.created_at else "sin-fecha"
+        month_row(key)["sales"] += s_.total or 0.0
+
     out = sorted(months.values(), key=lambda x: x["month"], reverse=True)
     for m in out:
         m["expenses"] = round(m["expenses"], 2)
         m["invoiced_expenses"] = round(m["invoiced_expenses"], 2)
-        m["income"] = round(m["income"], 2)
-        m["profit"] = round(m["income"] - m["expenses"], 2)
+        m["income"] = round(m["income"], 2)          # pedidos
+        m["sales"] = round(m["sales"], 2)            # ventas de bazar
+        m["profit"] = round(m["income"] + m["sales"] - m["expenses"], 2)
         m["by_category"] = {k: round(v, 2) for k, v in m["by_category"].items()}
     return {
         "months": out,

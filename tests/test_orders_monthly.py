@@ -79,3 +79,32 @@ def test_csv_relacion_para_contador(env):
     assert ",sí,no," in fito
     gina = next(l for l in body.splitlines() if "Gina" in l)
     assert ",no,no," in gina
+
+
+def test_fechas_de_cobro(env):
+    # Crear con fecha de entrada explícita.
+    r = env.post("/api/orders", json={
+        "client": "Hugo", "agreed_price": 400, "payment_status": "pending",
+        "created_at": "2026-07-15T12:00:00", "items": []})
+    assert r.status_code == 201
+    o = r.json()
+    assert str(o["created_at"]).startswith("2026-07-15")
+    assert o["deposit_date"] is None and o["paid_date"] is None
+    body = {"client": "Hugo", "agreed_price": 400, "items": [],
+            "created_at": "2026-07-15T12:00:00"}
+    # Pasa a anticipo sin fecha → se sella sola (hoy).
+    o = env.put(f"/api/orders/{o['id']}", json={**body, "payment_status": "deposit",
+                                                "deposit_amount": 100}).json()
+    assert o["deposit_date"] is not None
+    sellada = o["deposit_date"]
+    # Pasa a pagado con fecha explícita → la del usuario gana; el anticipo queda.
+    o = env.put(f"/api/orders/{o['id']}", json={
+        **body, "payment_status": "paid",
+        "deposit_date": sellada, "paid_date": "2026-08-02T12:00:00"}).json()
+    assert str(o["paid_date"]).startswith("2026-08-02")
+    assert o["deposit_date"] == sellada
+    # Y el CSV lleva ambas fechas.
+    txt = env.get("/api/orders/monthly.csv").text
+    assert "fecha_anticipo" in txt.splitlines()[0]
+    hugo = next(l for l in txt.splitlines() if "Hugo" in l)
+    assert "2026-08-02" in hugo

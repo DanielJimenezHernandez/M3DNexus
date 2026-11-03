@@ -2304,6 +2304,9 @@ function orderCardHTML(o) {
         <button class="btn ghost small" data-edit-order="${o.id}">Editar</button>
         <button class="btn danger small" data-del-order="${o.id}">✕</button>
       </div>
+      <div class="muted order-dates">📅 entró ${o.created_at ? new Date(o.created_at).toLocaleDateString() : "—"}${
+        o.deposit_date ? ` · anticipo ${new Date(o.deposit_date).toLocaleDateString()}${o.deposit_amount != null ? " (" + money2(o.deposit_amount, cur) + ")" : ""}` : ""}${
+        o.paid_date ? ` · <span class="paid-ok">pagado ${new Date(o.paid_date).toLocaleDateString()}</span>` : ""}</div>
       ${o.description ? `<div class="muted order-desc">${escHtml(o.description)}</div>` : ""}
       ${o.folder_path ? `<div class="order-folder muted">📁 <code>${escHtml(o.folder_path)}</code>
         <button class="btn ghost small" data-copy-path="${escHtml(o.folder_path)}" title="Copiar ruta">Copiar</button></div>`
@@ -2395,6 +2398,7 @@ function orderToBody(o) {
     currency: o.currency, due_date: o.due_date,
     manual_status: o.manual_status, notes: o.notes, folder: o.folder,
     deposit_amount: o.deposit_amount,
+    created_at: o.created_at, deposit_date: o.deposit_date, paid_date: o.paid_date,
     invoiced: !!o.invoiced, in_report: o.in_report !== false,
     postproc_rate: o.postproc_rate,
     postproc_minutes: o.postproc_minutes || 0,
@@ -2478,6 +2482,8 @@ function orderForm(o = {}, host = document.getElementById("order-form-host")) {
   const pay = o.payment_status || "pending";
   const oms = o.manual_status || "";
   const due = o.due_date ? new Date(o.due_date).toISOString().slice(0, 10) : "";
+  const dstr = (v) => v ? new Date(v).toISOString().slice(0, 10) : "";
+  const createdVal = dstr(o.created_at) || new Date().toISOString().slice(0, 10);
 
   host.innerHTML = `<div class="${inline ? "order-edit" : "card order-edit"}" style="${inline ? "" : "margin-top:1rem"}">
     <!-- Cabecera fija: guardar/cancelar y las fotos siempre a mano, sin bajar
@@ -2497,6 +2503,14 @@ function orderForm(o = {}, host = document.getElementById("order-form-host")) {
       <label class="field"><span>Precio acordado</span><input type="number" step="0.01" id="of-price" value="${o.agreed_price ?? ""}"></label>
       <label class="field" id="of-deposit-wrap" ${pay === "deposit" ? "" : "hidden"}><span>Monto recibido (anticipo)</span>
         <input type="number" step="0.01" id="of-deposit" value="${o.deposit_amount ?? ""}"></label>
+      <label class="field" id="of-depdate-wrap" ${pay === "deposit" || o.deposit_date ? "" : "hidden"}
+        title="Cuándo se recibió el anticipo (para la factura mensual)"><span>Fecha del anticipo</span>
+        <input type="date" id="of-depdate" value="${dstr(o.deposit_date)}"></label>
+      <label class="field" id="of-paiddate-wrap" ${pay === "paid" || o.paid_date ? "" : "hidden"}
+        title="Cuándo quedó pagado por completo (para la factura mensual e impuestos)"><span>Fecha de pago total</span>
+        <input type="date" id="of-paiddate" value="${dstr(o.paid_date)}"></label>
+      <label class="field" title="Cuándo entró el pedido: define a qué mes pertenece en el resumen contable"><span>Fecha de entrada</span>
+        <input type="date" id="of-created" value="${createdVal}"></label>
       <label class="field"><span>Fecha de entrega</span><input type="date" id="of-due" value="${due}"></label>
       <label class="field"><span>Carpeta local (nº)</span><input id="of-folder" placeholder="${o.id || "p.ej. 112"}" value="${escHtml(o.folder || "")}"></label>
       <label class="field"><span>Post-procesado: costo/hora</span>
@@ -2549,9 +2563,21 @@ function orderForm(o = {}, host = document.getElementById("order-form-host")) {
     });
   }
 
-  // El monto de anticipo solo se muestra si el pago es "anticipo".
+  // El monto/fecha de anticipo solo se muestran si el pago es "anticipo";
+  // la fecha de pago total, al marcar "pagado" (quedan visibles si ya traen
+  // valor, para poder corregirlas).
   host.querySelector("#of-pay").addEventListener("change", (e) => {
-    host.querySelector("#of-deposit-wrap").hidden = e.target.value !== "deposit";
+    const v = e.target.value;
+    host.querySelector("#of-deposit-wrap").hidden = v !== "deposit";
+    host.querySelector("#of-depdate-wrap").hidden =
+      v !== "deposit" && !host.querySelector("#of-depdate").value;
+    const pw = host.querySelector("#of-paiddate-wrap");
+    pw.hidden = v !== "paid" && !host.querySelector("#of-paiddate").value;
+    // Al marcar "pagado" se propone hoy (editable); el backend igual la sella.
+    if (v === "paid" && !host.querySelector("#of-paiddate").value)
+      host.querySelector("#of-paiddate").value = new Date().toISOString().slice(0, 10);
+    if (v === "deposit" && !host.querySelector("#of-depdate").value)
+      host.querySelector("#of-depdate").value = new Date().toISOString().slice(0, 10);
   });
 
   host.querySelector("#of-add-item").onclick = () => {
@@ -2670,12 +2696,16 @@ async function saveOrder(id, host, inline = false) {
   const price = host.querySelector("#of-price").value;
   const pay = host.querySelector("#of-pay").value;
   const deposit = host.querySelector("#of-deposit").value;
+  const dIso = (v) => v ? new Date(v + "T12:00:00").toISOString() : null;
   const body = {
     client,
     description: host.querySelector("#of-desc").value || null,
     payment_status: pay,
     agreed_price: price ? parseFloat(price) : null,
     deposit_amount: pay === "deposit" && deposit ? parseFloat(deposit) : null,
+    created_at: dIso(host.querySelector("#of-created").value),
+    deposit_date: dIso(host.querySelector("#of-depdate").value),
+    paid_date: dIso(host.querySelector("#of-paiddate").value),
     due_date: due ? new Date(due).toISOString() : null,
     manual_status: host.querySelector("#of-manual").value || null,
     invoiced: host.querySelector("#of-invoiced").checked,
@@ -2839,6 +2869,7 @@ function renderProjectsBoard() {
       }).join("");
     return `<div class="card order-card">
       <div class="order-head">${photo}<strong>${escHtml(pr.name)}</strong>
+        <span class="muted" style="font-size:.78rem">📅 ${pr.created_at ? new Date(pr.created_at).toLocaleDateString() : ""}</span>
         <span class="spacer"></span>
         <span class="pj-total">${money2(pr.cost_total, currency)}</span>
         <button class="btn ghost small" data-edit-proj="${pr.id}">Editar</button>
@@ -3252,6 +3283,8 @@ function projectForm(pr = {}) {
     <div class="form-grid">
       <label class="field"><span>Nombre</span><input class="pf-name" value="${escHtml(pr.name || "")}"></label>
       <label class="field"><span>Peso del producto completo (g, báscula)</span><input type="number" step="0.1" min="0" class="pf-total" value="${pr.total_weight_g ?? ""}"></label>
+      <label class="field" title="Cuándo se generó el proyecto (contabilidad)"><span>Fecha de creación</span>
+        <input type="date" class="pf-created" value="${(pr.created_at ? new Date(pr.created_at) : new Date()).toISOString().slice(0, 10)}"></label>
     </div>
     <label class="field"><span>Notas</span><input class="pf-notes" value="${escHtml(pr.notes || "")}"></label>
     <div class="pf-partshead"><span class="muted">Partes — impresora · gcode · tipo · peso (g, báscula) · tiempo (min) · cantidad</span></div>
@@ -3299,6 +3332,8 @@ function projectForm(pr = {}) {
     const body = {
       name: form.querySelector(".pf-name").value || "Proyecto",
       notes: form.querySelector(".pf-notes").value || null,
+      created_at: form.querySelector(".pf-created").value
+        ? new Date(form.querySelector(".pf-created").value + "T12:00:00").toISOString() : null,
       total_weight_g: parseFloat(form.querySelector(".pf-total").value) || null,
       extra_expenses: readExpenses(form.querySelector(".pf-expenses")),
       parts,

@@ -994,6 +994,8 @@ def _resolve_order(order: Order, live_by_printer, db: Session, base: str = "") -
         "folder": order.folder,
         "folder_path": _compose_folder(base, order.folder),
         "deposit_amount": order.deposit_amount,
+        "deposit_date": order.deposit_date,
+        "paid_date": order.paid_date,
         "invoiced": bool(order.invoiced),
         "in_report": order.in_report is not False,
         "postproc_rate": order.postproc_rate,
@@ -1239,7 +1241,8 @@ def orders_monthly_csv(db: Session = Depends(get_session)):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["mes", "fecha_entrada", "pedido", "cliente", "descripcion",
-                "precio_acordado", "pago", "anticipo", "fecha_entrega",
+                "precio_acordado", "pago", "anticipo", "fecha_anticipo",
+                "fecha_pago_total", "fecha_entrega",
                 "estado", "requirio_factura", "en_factura_general", "moneda"])
     for o in orders:
         estado = o.manual_status or "activo"
@@ -1254,6 +1257,8 @@ def orders_monthly_csv(db: Session = Depends(get_session)):
             o.agreed_price if o.agreed_price is not None else "",
             o.payment_status,
             o.deposit_amount if o.deposit_amount is not None else "",
+            o.deposit_date.strftime("%Y-%m-%d") if o.deposit_date else "",
+            o.paid_date.strftime("%Y-%m-%d") if o.paid_date else "",
             o.due_date.strftime("%Y-%m-%d") if o.due_date else "",
             estado,
             "sí" if o.invoiced else "no",
@@ -1269,9 +1274,23 @@ def orders_monthly_csv(db: Session = Depends(get_session)):
 
 def _apply_order(order: Order, data: OrderIn, db: Session) -> None:
     """Vuelca los campos del pedido y reemplaza sus piezas."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    prev_pay = order.payment_status
     order.client = data.client
     order.description = data.description
     order.payment_status = data.payment_status
+    # Fechas contables: lo que mande el usuario gana; si no manda nada, el
+    # paso a "anticipo"/"pagado" sella la fecha de hoy automáticamente.
+    if data.created_at is not None:
+        order.created_at = data.created_at
+    order.deposit_date = data.deposit_date
+    order.paid_date = data.paid_date
+    now = _dt.now(_tz.utc)
+    if data.payment_status == "deposit" and not order.deposit_date and prev_pay != "deposit":
+        order.deposit_date = now
+    if data.payment_status == "paid" and not order.paid_date and prev_pay != "paid":
+        order.paid_date = now
     order.agreed_price = data.agreed_price
     order.currency = data.currency or get_settings(db)[1]
     order.due_date = data.due_date
@@ -1366,6 +1385,8 @@ def delete_order(order_id: int, db: Session = Depends(get_session)):
 def _apply_project(project: Project, data: ProjectIn) -> None:
     project.name = data.name
     project.notes = data.notes
+    if data.created_at is not None:
+        project.created_at = data.created_at
     project.total_weight_g = data.total_weight_g
     project.extra_expenses = [e.model_dump() for e in data.extra_expenses] or None
     project.parts.clear()

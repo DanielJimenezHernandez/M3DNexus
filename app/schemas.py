@@ -268,6 +268,8 @@ class ProjectPartIn(BaseModel):
 class ProjectIn(BaseModel):
     name: str
     notes: str | None = None
+    # Editable: fecha en que se generó el proyecto (contabilidad).
+    created_at: datetime | None = None
     total_weight_g: float | None = None
     extra_expenses: list[ExpenseIn] = []
     parts: list[ProjectPartIn] = []
@@ -334,6 +336,11 @@ class OrderIn(BaseModel):
     notes: str | None = None
     folder: str | None = None
     deposit_amount: float | None = None
+    # Fechas contables: entrada (pisa created_at si se manda), anticipo y
+    # pago completo. Editables para cuadrar la factura mensual global.
+    created_at: datetime | None = None
+    deposit_date: datetime | None = None
+    paid_date: datetime | None = None
     # Contabilidad: factura propia / entra a la factura general del mes.
     invoiced: bool = False
     in_report: bool = True

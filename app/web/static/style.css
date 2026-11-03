@@ -158,6 +158,9 @@ textarea { resize: vertical; font-family: inherit; }
 #ped-monthly { margin-bottom: 1rem; }
 .monthly-table { width: 100%; }
 .monthly-table tr.grand td { border-top: 2px solid var(--border); }
+/* Fechas contables del pedido (entrada · anticipo · pagado). */
+.order-dates { font-size: 0.78rem; margin: 0.15rem 0 0.1rem; }
+.order-dates .paid-ok { color: var(--good); }
 /* Mezcla de materiales por % en una parte de proyecto (multimaterial). */
 .pmix { margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
 .pmix-row { display: flex; align-items: center; gap: 0.4rem; margin: 0.3rem 0; }

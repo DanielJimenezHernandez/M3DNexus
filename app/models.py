@@ -347,6 +347,11 @@ class Order(Base):
     folder: Mapped[str | None] = mapped_column(String, nullable=True)
     # Anticipo recibido (solo relevante con payment_status = deposit).
     deposit_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Fechas de cobro, para la factura mensual global y los impuestos:
+    # cuándo se pagó el anticipo y cuándo quedó pagado por completo. Se
+    # auto-sellan al cambiar el estado de pago, pero son editables.
+    deposit_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paid_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Contabilidad: si el pedido requirió factura propia (queda fuera de la
     # factura general del mes) y si entra al monto de la factura general del
     # reporte mensual (los pagados en efectivo suelen excluirse).

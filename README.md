@@ -421,6 +421,13 @@ Detectados en la revisión del **2026-07-22** contra la BD en producción
   tabla fija en `services/estimate.py`).
 - [ ] Aplicar el **factor de calibración** de un proyecto (báscula ÷ estimado)
   a las estimaciones futuras de esos gcodes.
+- [ ] **Punto de venta para bazares (fases 2-3)**. La fase 1 (catálogo de
+  productos con SKU, QR imprimibles, coste heredado del proyecto y
+  `/api/products/by-sku/`) ya está. Fase 2: página `/pos` móvil con escáner de
+  QR por cámara (BarcodeDetector + fallback), carrito y cobro → tabla `sales`
+  con método de pago y evento/bazar; requiere HTTPS (cert en el Nginx Proxy
+  Manager). Fase 3: ventas como ingresos en la rentabilidad mensual y el CSV
+  del contador, resumen por evento y stock con descuento automático.
 - [ ] **Tarifa de operación eléctrica por hora** (opción B, sustituto fino del
   multiplicador actual): medir una semana el taller completo (Kill-A-Watt),
   restar los kWh ya atribuidos a impresiones y repartir el residuo (standby +

@@ -312,6 +312,20 @@ class OrderItemIn(BaseModel):
         return v or None
 
 
+class ProductIn(BaseModel):
+    """Producto del catálogo (bazar / punto de venta)."""
+
+    name: str
+    sku: str | None = None          # vacío = se autogenera M3D-<id>
+    price: float = Field(default=0, ge=0)
+    cost_ref: float | None = Field(default=None, ge=0)
+    project_id: int | None = None
+    stock: int = Field(default=0, ge=0)
+    category: str | None = None
+    active: bool = True
+    notes: str | None = None
+
+
 class BusinessExpenseIn(BaseModel):
     """Gasto general del negocio (no confundir con ExpenseIn, el de pedidos)."""
 

@@ -158,6 +158,20 @@ textarea { resize: vertical; font-family: inherit; }
 #ped-monthly { margin-bottom: 1rem; }
 .monthly-table { width: 100%; }
 .monthly-table tr.grand td { border-top: 2px solid var(--border); }
+/* Catálogo de productos. */
+.prod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 0.8rem; }
+.prod-card { display: flex; gap: 0.7rem; padding: 0.7rem; align-items: flex-start; }
+.prod-card.excluded { opacity: 0.55; }
+.prod-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 8px;
+  cursor: pointer; flex-shrink: 0; }
+.prod-photo.ph { background: var(--panel-2); cursor: default; }
+.prod-body { flex: 1; min-width: 0; }
+.prod-name { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.prod-meta { font-size: 0.78rem; margin: 0.15rem 0; }
+.prod-price { font-size: 1.05rem; }
+.prod-margin { font-size: 0.76rem; display: block; }
+.prod-actions { display: flex; flex-direction: column; gap: 0.3rem; }
 /* Fechas contables del pedido (entrada · anticipo · pagado). */
 .order-dates { font-size: 0.78rem; margin: 0.15rem 0 0.1rem; }
 .order-dates .paid-ok { color: var(--good); }

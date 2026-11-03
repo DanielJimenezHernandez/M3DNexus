@@ -114,7 +114,7 @@ def index():
 # que el front resuelva la sección. Se registran una a una, y ANTES del mount de
 # estáticos, para no capturar /app.js ni /style.css con un comodín.
 SPA_PAGES = (
-    "dashboard", "trabajos", "gastos", "impresiones", "impresoras",
+    "dashboard", "trabajos", "gastos", "productos", "impresiones", "impresoras",
     "materiales", "calibracion", "estimacion", "cotizacion", "ajustes",
     "pedidos",   # alias histórico de /trabajos
 )

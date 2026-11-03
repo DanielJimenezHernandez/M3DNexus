@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — gestión de impresión 3D</title>
-  <link rel="stylesheet" href="/style.css?v=124" />
+  <link rel="stylesheet" href="/style.css?v=125" />
 </head>
 <body>
   <!-- Panel lateral colapsable. Los botones conservan data-tab: es la clave que
@@ -20,6 +20,7 @@
       <button data-tab="dashboard" class="active">Dashboard</button>
       <button data-tab="pedidos">Trabajos</button>
       <button data-tab="gastos">Gastos</button>
+      <button data-tab="productos">Productos</button>
       <button data-tab="jobs">Impresiones</button>
       <button data-tab="printers">Impresoras</button>
       <button data-tab="materials">Materiales</button>
@@ -50,6 +51,21 @@
       <table id="component-table"></table>
       <h2>Por impresora</h2>
       <table id="printer-stats-table"></table>
+    </section>
+
+    <!-- Catálogo de productos (bazar / punto de venta) -->
+    <section id="productos" class="tab">
+      <div class="toolbar">
+        <h2 style="margin:0">Productos</h2>
+        <input type="search" id="pr-search" placeholder="Nombre, SKU o categoría…">
+        <select id="pr-cat"><option value="">— todas las categorías —</option></select>
+        <label class="muted"><input type="checkbox" id="pr-inactive" style="width:auto"> Ver inactivos</label>
+        <span class="spacer"></span>
+        <button class="btn ghost small" id="pr-labels">Imprimir etiquetas QR</button>
+        <button class="btn" id="add-product">+ Nuevo producto</button>
+      </div>
+      <div id="product-form-host"></div>
+      <div id="products-grid" class="prod-grid"></div>
     </section>
 
     <!-- Gastos del negocio (contabilidad / rentabilidad) -->
@@ -366,6 +382,7 @@
   </main>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=124"></script>
+  <script src="/vendor/qrcode.min.js"></script>
+  <script src="/app.js?v=125"></script>
 </body>
 </html>

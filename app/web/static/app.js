@@ -61,7 +61,8 @@ let currentTab = "dashboard";
 // la sección no siempre coincide con la ruta, así que se mapean aquí. El
 // servidor devuelve el index para estas rutas, y aquí se resuelve cuál abrir.
 const TAB_ROUTES = {
-  dashboard: "dashboard", pedidos: "trabajos", gastos: "gastos", jobs: "impresiones",
+  dashboard: "dashboard", pedidos: "trabajos", gastos: "gastos",
+  productos: "productos", jobs: "impresiones",
   printers: "impresoras", materials: "materiales", calibracion: "calibracion",
   quote: "estimacion", cotizacion: "cotizacion", settings: "ajustes",
 };
@@ -149,6 +150,7 @@ async function goToJobsForGcode(gcodeFilename) {
 
 function loadTab(name) {
   ({ dashboard: loadDashboard, pedidos: () => setPedMode(projMode), gastos: loadGastos,
+     productos: loadProductos,
      jobs: loadJobs,
      printers: loadPrinters, materials: loadMaterials, calibracion: loadCalibracion,
      quote: loadEstimacion, cotizacion: loadCotizacion, settings: loadSettings })[name]?.();
@@ -4581,6 +4583,191 @@ function printCotiz() {
     <div class="foot">${escHtml(s.company_name || "M3D Nexus")} — Transforma tus ideas en realidad con impresión 3D</div>
   `);
 }
+
+// --- Catálogo de productos (bazar / punto de venta) --------------------------
+// Cada producto lleva un SKU que viaja en el QR de su etiqueta; el POS (fase 2)
+// lo escaneará para cobrar. El coste viene a mano o del proyecto vinculado.
+let productos = [];
+
+async function loadProductos() {
+  productos = await api.get("/api/products");
+  const cSel = document.getElementById("pr-cat");
+  const cur = cSel.value;
+  const cats = [...new Set(productos.map((p) => p.category).filter(Boolean))].sort();
+  cSel.innerHTML = `<option value="">— todas las categorías —</option>` +
+    cats.map((c) => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join("");
+  if ([...cSel.options].some((o) => o.value === cur)) cSel.value = cur;
+  renderProductos();
+}
+
+function renderProductos() {
+  const q = (document.getElementById("pr-search").value || "").toLowerCase();
+  const cat = document.getElementById("pr-cat").value;
+  const showInactive = document.getElementById("pr-inactive").checked;
+  const rows = productos.filter((p) =>
+    (showInactive || p.active)
+    && (!cat || p.category === cat)
+    && (!q || `${p.name} ${p.sku || ""} ${p.category || ""}`.toLowerCase().includes(q)));
+  const host = document.getElementById("products-grid");
+  if (!rows.length) {
+    host.innerHTML = `<p class="muted">Sin productos. Crea el primero con “+ Nuevo producto”.</p>`;
+    return;
+  }
+  host.innerHTML = rows.map((p) => {
+    const foto = p.photo_url
+      ? `<img class="prod-photo" src="${p.photo_url}" loading="lazy" alt="" onclick="window.open('${p.photo_url}','_blank')">`
+      : `<div class="prod-photo ph"></div>`;
+    const margen = p.margin != null
+      ? `<span class="${p.margin >= 0 ? "profit-pos" : "profit-neg"}">margen ${money2(p.margin, currency)}${p.margin_pct != null ? ` (${p.margin_pct}%)` : ""}</span>`
+      : `<span class="muted">sin coste de ref.</span>`;
+    const stockCls = p.stock <= 0 ? "profit-neg" : (p.stock <= 2 ? "cost-val warn" : "");
+    return `<div class="card prod-card ${p.active ? "" : "excluded"}">
+      ${foto}
+      <div class="prod-body">
+        <div class="prod-name"><strong>${escHtml(p.name)}</strong>
+          ${p.category ? `<span class="pill gx-cat">${escHtml(p.category)}</span>` : ""}
+          ${p.active ? "" : `<span class="pill review">inactivo</span>`}</div>
+        <div class="muted prod-meta">
+          <code>${escHtml(p.sku || "—")}</code>
+          · stock <span class="${stockCls}">${p.stock}</span>
+          ${p.project_name ? ` · <span title="Coste real heredado del proyecto">de “${escHtml(p.project_name)}”</span>` : ""}
+        </div>
+        <div class="prod-price"><strong>${money2(p.price, currency)}</strong>
+          <span class="muted prod-margin">${p.cost != null ? `coste ${money2(p.cost, currency)} · ` : ""}${margen}</span></div>
+      </div>
+      <div class="prod-actions">
+        <button class="btn ghost small" data-label-prod="${p.id}" title="Imprimir etiquetas QR de este producto">QR</button>
+        <button class="btn ghost small" data-edit-prod="${p.id}">Editar</button>
+        <button class="btn danger small" data-del-prod="${p.id}">✕</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  host.querySelectorAll("[data-edit-prod]").forEach((b) =>
+    b.addEventListener("click", () => productForm(productos.find((x) => x.id == b.dataset.editProd))));
+  host.querySelectorAll("[data-del-prod]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const p = productos.find((x) => x.id == b.dataset.delProd);
+      if (!confirm(`¿Borrar el producto “${p?.name || ""}” del catálogo?`)) return;
+      await api.send(`/api/products/${b.dataset.delProd}`, "DELETE");
+      toast("Producto borrado"); loadProductos();
+    }));
+  host.querySelectorAll("[data-label-prod]").forEach((b) =>
+    b.addEventListener("click", () =>
+      printProductLabels([productos.find((x) => x.id == b.dataset.labelProd)])));
+}
+
+async function productForm(x = {}) {
+  const host = document.getElementById("product-form-host");
+  // Proyectos para heredar el coste real (ligero: ya está resuelto en el API).
+  let projs = [];
+  try { projs = await api.get("/api/projects"); } catch { /* sin proyectos */ }
+  const cats = [...new Set(productos.map((p) => p.category).filter(Boolean))].sort();
+  host.innerHTML = `<div class="card" style="margin-bottom:1rem">
+    <div class="form-head">
+      <h2>${x.id ? "Editar" : "Nuevo"} producto</h2>
+      <span class="spacer"></span>
+      <button class="btn" id="pr-save">Guardar</button>
+      <button class="btn ghost" id="pr-cancel">Cancelar</button>
+    </div>
+    <div class="form-grid">
+      <label class="field"><span>Nombre</span><input id="prf-name" placeholder="Llavero pulpo articulado" value="${escHtml(x.name || "")}"></label>
+      <label class="field" title="Identificador que viaja en el QR de la etiqueta; vacío = se genera solo (M3D-0042)"><span>SKU</span>
+        <input id="prf-sku" placeholder="auto" value="${escHtml(x.sku || "")}"></label>
+      <label class="field"><span>Precio de venta</span><input type="number" step="0.01" min="0" id="prf-price" value="${x.price ?? ""}"></label>
+      <label class="field"><span>Stock</span><input type="number" min="0" id="prf-stock" value="${x.stock ?? 0}"></label>
+      <label class="field"><span>Categoría</span>
+        <input id="prf-cat" list="prf-cat-list" placeholder="Llaveros, Figuras…" value="${escHtml(x.category || "")}">
+        <datalist id="prf-cat-list">${cats.map((c) => `<option value="${escHtml(c)}">`).join("")}</datalist></label>
+      <label class="field" title="Hereda el coste REAL del proyecto (báscula + máquina) para ver el margen"><span>Proyecto de origen</span>
+        <select id="prf-proj"><option value="">— ninguno —</option>
+          ${projs.map((pr) => `<option value="${pr.id}" ${pr.id === x.project_id ? "selected" : ""}>${escHtml(pr.name)} (${money2(pr.cost_total, currency)})</option>`).join("")}</select></label>
+      <label class="field" title="Si lo pones, gana sobre el coste del proyecto"><span>Coste manual (opcional)</span>
+        <input type="number" step="0.01" min="0" id="prf-cost" value="${x.cost_ref ?? ""}"></label>
+      <label class="field chk-line"><span>Estado</span>
+        <span class="chk-pair"><input type="checkbox" id="prf-active" ${x.active === false ? "" : "checked"}> Activo (a la venta)</span></label>
+    </div>
+    <label class="field"><span>Notas</span>
+      <textarea id="prf-notes" rows="2" placeholder="Variantes de color, tiempo de reposición, en qué bazar se vende mejor…">${escHtml(x.notes || "")}</textarea></label>
+    <div class="entity-photos">
+      <div class="muted" style="font-size:.82rem;margin:.6rem 0 .3rem"><strong>Fotos del producto</strong></div>
+      <div id="prf-photos">${x.id ? "" : '<span class="muted">Guarda el producto y podrás subir fotos aquí mismo.</span>'}</div>
+    </div>
+  </div>`;
+  if (x.id) entityPhotoEditor(host.querySelector("#prf-photos"), "product", x.id);
+  host.querySelector("#pr-cancel").onclick = () => { host.innerHTML = ""; };
+  host.querySelector("#pr-save").onclick = async () => {
+    const name = host.querySelector("#prf-name").value.trim();
+    if (!name) { toast("El producto necesita un nombre"); return; }
+    const body = {
+      name,
+      sku: host.querySelector("#prf-sku").value.trim() || null,
+      price: parseFloat(host.querySelector("#prf-price").value) || 0,
+      stock: Math.max(0, parseInt(host.querySelector("#prf-stock").value) || 0),
+      category: host.querySelector("#prf-cat").value.trim() || null,
+      project_id: host.querySelector("#prf-proj").value ? +host.querySelector("#prf-proj").value : null,
+      cost_ref: host.querySelector("#prf-cost").value ? parseFloat(host.querySelector("#prf-cost").value) : null,
+      active: host.querySelector("#prf-active").checked,
+      notes: host.querySelector("#prf-notes").value.trim() || null,
+    };
+    try {
+      const saved = x.id
+        ? await api.send(`/api/products/${x.id}`, "PUT", body)
+        : await api.send("/api/products", "POST", body);
+      toast(`Producto guardado (${saved.sku})`);
+      await loadProductos();
+      if (!x.id) productForm(saved); else host.innerHTML = "";
+    } catch (e) { toast("Error: " + e.message); }
+  };
+}
+
+// Hoja de etiquetas QR: una etiqueta por unidad en stock (mínimo 1 por
+// producto), con QR del SKU + nombre + precio, lista para recortar y pegar.
+function printProductLabels(list) {
+  const items = (list || []).filter(Boolean);
+  if (!items.length) return toast("No hay productos para etiquetar");
+  const cells = [];
+  items.forEach((p) => {
+    if (!p.sku) return;
+    const q = qrcode(0, "M");
+    q.addData(p.sku);
+    q.make();
+    const svg = q.createSvgTag({ cellSize: 3, margin: 0, scalable: true });
+    const n = Math.max(1, p.stock || 0);
+    for (let i = 0; i < n; i++) {
+      cells.push(`<div class="lbl">
+        <div class="lbl-qr">${svg}</div>
+        <div class="lbl-txt"><div class="lbl-name">${escHtml(p.name)}</div>
+          <div class="lbl-sku">${escHtml(p.sku)}</div>
+          <div class="lbl-price">${money2(p.price, currency)}</div></div>
+      </div>`);
+    }
+  });
+  const w = window.open("", "_blank");
+  if (!w) return toast("El navegador bloqueó la ventana emergente");
+  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+    <title>Etiquetas QR</title><style>
+      body { font-family: system-ui, sans-serif; margin: 8mm; }
+      .sheet { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; }
+      .lbl { display: flex; align-items: center; gap: 3mm; border: 1px dashed #999;
+             padding: 2.5mm; break-inside: avoid; }
+      .lbl-qr svg { width: 17mm; height: 17mm; display: block; }
+      .lbl-name { font-size: 8.5pt; font-weight: 600; line-height: 1.15; }
+      .lbl-sku { font-size: 7pt; color: #555; font-family: monospace; }
+      .lbl-price { font-size: 10pt; font-weight: 700; }
+      @media print { body { margin: 5mm; } }
+    </style></head><body><div class="sheet">${cells.join("")}</div></body></html>`);
+  w.document.close();
+  w.focus();
+  w.print();
+}
+
+document.getElementById("add-product").addEventListener("click", () => productForm());
+document.getElementById("pr-labels").addEventListener("click", () =>
+  printProductLabels(productos.filter((p) => p.active)));
+document.getElementById("pr-search").addEventListener("input", renderProductos);
+document.getElementById("pr-cat").addEventListener("change", renderProductos);
+document.getElementById("pr-inactive").addEventListener("change", renderProductos);
 
 // --- Gastos del negocio (contabilidad / rentabilidad) ------------------------
 // Distintos de los "gastos extra" de un pedido: esto es el gasto general del

@@ -415,8 +415,36 @@ class EntityPhoto(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
-ENTITY_PHOTO_TYPES = {"order", "project", "expense"}
-ENTITY_PHOTO_MAX = 8   # tope de fotos por pedido/proyecto/gasto
+ENTITY_PHOTO_TYPES = {"order", "project", "expense", "product"}
+ENTITY_PHOTO_MAX = 8   # tope de fotos por pedido/proyecto/gasto/producto
+
+
+class Product(Base):
+    """Producto del catálogo (para bazares y punto de venta).
+
+    Cada producto lleva un SKU propio (auto: M3D-0042) que viaja dentro del
+    QR de su etiqueta imprimible; el POS lo escanea para cobrar. El coste de
+    referencia puede venir a mano (cost_ref) o heredarse del PROYECTO del que
+    nació el producto (coste real por báscula + máquina), para ver el margen.
+    """
+
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    sku: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    price: Mapped[float] = mapped_column(Float, default=0.0)        # venta
+    cost_ref: Mapped[float | None] = mapped_column(Float, nullable=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id"), nullable=True
+    )
+    stock: Mapped[int] = mapped_column(Integer, default=0)
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
+    active: Mapped[bool] = mapped_column(default=True)
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    project: Mapped["Project | None"] = relationship()
 
 
 class BusinessExpense(Base):

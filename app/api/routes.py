@@ -38,6 +38,7 @@ from ..models import (
     SETTING_QUOTE_TERMS,
     BusinessExpense,
     Material,
+    Product,
     Order,
     OrderItem,
     PrintJob,
@@ -49,6 +50,7 @@ from ..models import (
 from ..schemas import (
     AssignMaterialIn,
     BusinessExpenseIn,
+    ProductIn,
     JobOut,
     MaterialIn,
     MaterialOut,
@@ -1056,6 +1058,111 @@ def orders_queue(db: Session = Depends(get_session)):
 
 
 # --------------------------------------------------------------------------- #
+# Catálogo de productos (bazar / punto de venta)
+# --------------------------------------------------------------------------- #
+def _product_dict(x: Product, db: Session, project_costs: dict | None = None) -> dict:
+    # Coste efectivo: el manual gana; si no, el coste real del proyecto vinculado.
+    cost = x.cost_ref
+    if cost is None and x.project_id:
+        if project_costs is not None and x.project_id in project_costs:
+            cost = project_costs[x.project_id]
+        elif x.project:
+            cost = resolve_project(db, x.project)["cost_total"]
+    margin = None
+    if cost is not None and x.price:
+        margin = round(x.price - cost, 2)
+    return {
+        "id": x.id, "name": x.name, "sku": x.sku, "price": x.price,
+        "cost_ref": x.cost_ref, "project_id": x.project_id,
+        "project_name": x.project.name if x.project else None,
+        "cost": round(cost, 2) if cost is not None else None,
+        "margin": margin,
+        "margin_pct": (round(margin / x.price * 100, 1)
+                       if margin is not None and x.price else None),
+        "stock": x.stock, "category": x.category, "active": bool(x.active),
+        "notes": x.notes, "created_at": x.created_at,
+        "photo_url": _entity_first_photo(db, "product", x.id),
+    }
+
+
+@router.get("/products")
+def list_products(db: Session = Depends(get_session)):
+    rows = db.scalars(select(Product).order_by(Product.name)).all()
+    # Los costes de proyecto se resuelven una vez por proyecto, no por producto.
+    costs: dict[int, float] = {}
+    for x in rows:
+        if x.cost_ref is None and x.project_id and x.project_id not in costs and x.project:
+            costs[x.project_id] = resolve_project(db, x.project)["cost_total"]
+    return [_product_dict(x, db, costs) for x in rows]
+
+
+@router.get("/products/by-sku/{sku}")
+def product_by_sku(sku: str, db: Session = Depends(get_session)):
+    """Búsqueda por SKU (lo que trae el QR de la etiqueta): base del POS."""
+    x = db.scalar(select(Product).where(func.lower(Product.sku) == sku.lower()))
+    if not x:
+        raise HTTPException(404, "Producto no encontrado")
+    return _product_dict(x, db)
+
+
+def _apply_product(x: Product, data: ProductIn, db: Session) -> None:
+    if data.project_id and not db.get(Project, data.project_id):
+        raise HTTPException(404, f"Proyecto {data.project_id} no encontrado")
+    sku = (data.sku or "").strip() or None
+    if sku:
+        dup = db.scalar(select(Product).where(
+            func.lower(Product.sku) == sku.lower(), Product.id != (x.id or 0)))
+        if dup:
+            raise HTTPException(409, f"El SKU {sku} ya es de “{dup.name}”")
+    x.name = data.name
+    x.sku = sku
+    x.price = data.price
+    x.cost_ref = data.cost_ref
+    x.project_id = data.project_id
+    x.stock = data.stock
+    x.category = (data.category or "").strip() or None
+    x.active = data.active
+    x.notes = data.notes
+
+
+@router.post("/products", status_code=201)
+def create_product(data: ProductIn, db: Session = Depends(get_session)):
+    x = Product(name=data.name)
+    _apply_product(x, data, db)
+    db.add(x)
+    db.flush()
+    if not x.sku:
+        x.sku = f"M3D-{x.id:04d}"   # SKU auto: corto y único, viaja en el QR
+    db.commit()
+    db.refresh(x)
+    return _product_dict(x, db)
+
+
+@router.put("/products/{product_id}")
+def update_product(product_id: int, data: ProductIn, db: Session = Depends(get_session)):
+    x = db.get(Product, product_id)
+    if not x:
+        raise HTTPException(404, "Producto no encontrado")
+    _apply_product(x, data, db)
+    if not x.sku:
+        x.sku = f"M3D-{x.id:04d}"
+    db.commit()
+    return _product_dict(x, db)
+
+
+@router.delete("/products/{product_id}", status_code=204)
+def delete_product(product_id: int, db: Session = Depends(get_session)):
+    x = db.get(Product, product_id)
+    if x:
+        for p in db.scalars(select(EntityPhoto).where(
+                EntityPhoto.entity_type == "product",
+                EntityPhoto.entity_id == product_id)).all():
+            db.delete(p)
+        db.delete(x)
+        db.commit()
+
+
+# --------------------------------------------------------------------------- #
 # Gastos del negocio (contabilidad / rentabilidad)
 # --------------------------------------------------------------------------- #
 def _expense_dict(x: BusinessExpense, db: Session) -> dict:
@@ -1582,7 +1689,8 @@ def add_entity_photo(payload: dict = Body(...), db: Session = Depends(get_sessio
     eid = payload.get("entity_id")
     if et not in ENTITY_PHOTO_TYPES:
         raise HTTPException(422, "entity_type inválido")
-    model = {"order": Order, "project": Project, "expense": BusinessExpense}[et]
+    model = {"order": Order, "project": Project, "expense": BusinessExpense,
+             "product": Product}[et]
     if not db.get(model, eid):
         raise HTTPException(404, "Pedido/proyecto/gasto no encontrado")
     count = db.scalar(

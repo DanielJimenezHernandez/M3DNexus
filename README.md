@@ -467,9 +467,17 @@ Detectados en la revisión del **2026-07-22** contra la BD en producción
     botón "probar" con devices/status), `POST /api/clip/charge` desde Cobrar
     cuando el método es tarjeta, modal de espera con poll y la venta se
     registra solo al quedar `APPROVED` (con botón "registrar sin terminal").
-  - Alternativa equivalente: Mercado Pago Point Smart 2 con la API de
-    integraciones presenciales de MP (mismo patrón; fue el primer proveedor
-    de vim-pos).
+  - **Decisión (nov 2026): irá por Mercado Pago Point Smart 2** (ya tiene
+    cuenta MP de su venta en línea; comisión igual o menor que Clip). API
+    documentada: listar dispositivos, poner la terminal en modo PDV, `POST
+    /point/integration-api/devices/{deviceId}/payment-intents` (monto en
+    centavos SIN decimales: $150.00 → 15000), `GET
+    /point/integration-api/payment-intents/{id}` para poll (ventana de 3
+    meses), `DELETE` cancela si sigue `open`; `external_reference` liga con
+    nuestra venta. MP recomienda la nueva **API Orders** para integraciones
+    nuevas → revisarla primero al construir. A diferencia de Clip, MP sí
+    tiene modo de prueba. El contrato de Clip de arriba queda de referencia
+    por si algún día cambia de proveedor.
 - [ ] **Tarifa de operación eléctrica por hora** (opción B, sustituto fino del
   multiplicador actual): medir una semana el taller completo (Kill-A-Watt),
   restar los kWh ya atribuidos a impresiones y repartir el residuo (standby +

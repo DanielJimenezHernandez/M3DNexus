@@ -4775,6 +4775,8 @@ document.getElementById("pr-inactive").addEventListener("change", renderProducto
 // HTTPS; sin cámara siempre queda el buscador por nombre/SKU.
 let posCart = [];        // [{product_id, sku, name, price, qty, stock}]
 let posSales = [];
+let posSummary = null;   // /api/sales/summary: historial agrupado por evento
+const posOpenEvents = new Set();   // eventos expandidos (persisten al re-render)
 let posStream = null;
 let posScanTimer = null;
 const POS_PAY = { efectivo: "Efectivo", tarjeta: "Tarjeta", transferencia: "Transferencia" };
@@ -4787,8 +4789,10 @@ async function loadPOS() {
   }
   document.getElementById("pos-event").value = localStorage.getItem("posEvent") || "";
   try { posSales = await api.get("/api/sales?limit=100"); } catch { posSales = []; }
+  try { posSummary = await api.get("/api/sales/summary"); } catch { posSummary = null; }
   renderPosCart();
   renderPosToday();
+  renderPosHistory();
 }
 
 function posAdd(p, viaScan = false) {
@@ -4863,7 +4867,8 @@ async function posCharge() {
     toast(`Cobrado ${money2(sale.total, sale.currency)} ✔`);
     productos = await api.get("/api/products");   // stock actualizado
     posSales = await api.get("/api/sales?limit=100");
-    renderPosCart(); renderPosToday();
+    try { posSummary = await api.get("/api/sales/summary"); } catch {}
+    renderPosCart(); renderPosToday(); renderPosHistory();
   } catch (e) { toast("Error: " + e.message); }
 }
 
@@ -4895,8 +4900,64 @@ function renderPosToday() {
       toast("Venta deshecha");
       productos = await api.get("/api/products");
       posSales = await api.get("/api/sales?limit=100");
+      try { posSummary = await api.get("/api/sales/summary"); } catch {}
       renderPosToday();
+      renderPosHistory();
     }));
+}
+
+// Historial de ventas agrupado por evento/bazar: cuánto entró en cada bazar,
+// qué piezas se vendieron y a cuánto, y el desglose por forma de pago.
+function posDateRange(g) {
+  const fmt = (iso) => new Date(iso).toLocaleDateString([], {
+    day: "numeric", month: "short", year: "numeric" });
+  if (!g.first) return "";
+  const a = fmt(g.first), b = fmt(g.last || g.first);
+  return a === b ? a : `${a} – ${b}`;
+}
+
+function renderPosHistory() {
+  const host = document.getElementById("pos-history");
+  if (!host) return;
+  const groups = posSummary?.events || [];
+  const cur = posSummary?.currency || currency;
+  host.innerHTML = `<div class="card" style="margin-top:.8rem">
+    <div class="toolbar" style="margin-bottom:.3rem">
+      <strong>Historial por evento / bazar</strong>
+      <span class="spacer"></span>
+      <a class="btn ghost small" href="/api/sales.csv" download>⬇ CSV contador</a>
+    </div>
+    ${groups.map((g) => `<details class="pos-event" data-ev="${escHtml(g.event)}"
+        ${posOpenEvents.has(g.event) ? "open" : ""}>
+      <summary>
+        <span class="pos-evname">${escHtml(g.event)}</span>
+        <span class="muted">${posDateRange(g)} · ${g.n_sales} cobros · ${g.pieces} piezas</span>
+        <span class="spacer"></span>
+        <strong class="profit-pos">${money2(g.total, cur)}</strong>
+      </summary>
+      <div class="pos-evpay muted">${Object.entries(g.by_payment)
+        .map(([k, v]) => `${POS_PAY[k] || k}: ${money2(v, cur)}`).join(" · ")}</div>
+      <table class="pos-evitems">
+        <tbody>${g.items.map((it) => `<tr>
+          <td class="num">${it.qty}×</td>
+          <td>${escHtml(it.name || "")} <span class="muted">${escHtml(it.sku || "")}</span></td>
+          <td class="num">${money2(it.amount, cur)}</td>
+        </tr>`).join("")}</tbody>
+      </table>
+      <div class="pos-evsales">${g.sales.map((s) => `<div class="pos-sale">
+        <span class="muted">${new Date(s.created_at).toLocaleString([], {
+          day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+        <span class="pos-sitems">${(s.items || []).map((l) =>
+          `${l.qty}× ${escHtml(l.name)}`).join(", ")}</span>
+        <span class="muted">${POS_PAY[s.payment_method] || s.payment_method || ""}</span>
+        <strong>${money2(s.total, s.currency || cur)}</strong>
+      </div>`).join("")}</div>
+    </details>`).join("") || `<p class="muted">Aún no hay ventas registradas.</p>`}
+  </div>`;
+  host.querySelectorAll(".pos-event").forEach((d) => d.addEventListener("toggle", () => {
+    if (d.open) posOpenEvents.add(d.dataset.ev);
+    else posOpenEvents.delete(d.dataset.ev);
+  }));
 }
 
 // Buscador manual (fallback universal del escáner).

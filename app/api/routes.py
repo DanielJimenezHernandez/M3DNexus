@@ -1167,9 +1167,35 @@ def delete_product(product_id: int, db: Session = Depends(get_session)):
 # --------------------------------------------------------------------------- #
 # Ventas de mostrador (bazar / punto de venta)
 # --------------------------------------------------------------------------- #
+def _sale_local(dt):
+    """Timestamp de BD (UTC naive) → hora local del negocio (TZ del contenedor).
+
+    Las ventas se cobran en persona: su fecha contable es la local del bazar,
+    no la UTC (una venta a las 7pm NO es del día siguiente).
+    """
+    from datetime import timezone as _tz
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    return dt.astimezone()
+
+
+def _sale_iso(dt) -> str | None:
+    """ISO con 'Z' explícita: la BD guarda UTC naive y el front necesita la
+    marca de zona para convertir a la hora local del navegador (si no,
+    mostraría la hora UTC tal cual)."""
+    from datetime import timezone as _tz
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    return dt.astimezone(_tz.utc).isoformat().replace("+00:00", "Z")
+
+
 def _sale_dict(s_: Sale) -> dict:
     return {
-        "id": s_.id, "created_at": s_.created_at, "event": s_.event,
+        "id": s_.id, "created_at": _sale_iso(s_.created_at), "event": s_.event,
         "payment_method": s_.payment_method, "items": s_.items or [],
         "total": s_.total, "currency": s_.currency,
     }
@@ -1181,6 +1207,89 @@ def list_sales(limit: int = 100, db: Session = Depends(get_session)):
         select(Sale).order_by(Sale.created_at.desc()).limit(max(1, min(limit, 500)))
     ).all()
     return [_sale_dict(s_) for s_ in rows]
+
+
+@router.get("/sales/summary")
+def sales_summary(db: Session = Depends(get_session)):
+    """Historial por evento/bazar: qué se vendió, cuánto y con qué se cobró.
+
+    Agrupa por nombre de evento; las ventas sin evento se agrupan por mes
+    para que el cajón "sin evento" no crezca sin límite.
+    """
+    _, currency = get_settings(db)
+    rows = db.scalars(select(Sale).order_by(Sale.created_at.desc())).all()
+    groups: dict[str, dict] = {}
+    for s_ in rows:
+        event = (s_.event or "").strip()
+        if event:
+            key = event
+        else:
+            loc = _sale_local(s_.created_at)
+            key = f"Sin evento · {loc.strftime('%Y-%m') if loc else 'sin-fecha'}"
+        g = groups.setdefault(key, {
+            "event": key, "first": None, "last": None, "n_sales": 0,
+            "pieces": 0, "total": 0.0, "by_payment": {}, "items": {},
+            "sales": [],
+        })
+        ts = _sale_iso(s_.created_at)
+        if ts:
+            g["first"] = min(g["first"] or ts, ts)
+            g["last"] = max(g["last"] or ts, ts)
+        g["n_sales"] += 1
+        g["total"] += s_.total or 0.0
+        pay = s_.payment_method or "otro"
+        g["by_payment"][pay] = round(g["by_payment"].get(pay, 0.0) + (s_.total or 0.0), 2)
+        for line in s_.items or []:
+            qty = line.get("qty") or 0
+            g["pieces"] += qty
+            ik = line.get("sku") or line.get("name") or "?"
+            item = g["items"].setdefault(ik, {
+                "name": line.get("name"), "sku": line.get("sku"),
+                "qty": 0, "amount": 0.0,
+            })
+            item["qty"] += qty
+            item["amount"] += (line.get("price") or 0.0) * qty
+        g["sales"].append(_sale_dict(s_))
+    out = sorted(groups.values(), key=lambda x: x["last"] or "", reverse=True)
+    for g in out:
+        g["total"] = round(g["total"], 2)
+        g["items"] = sorted(
+            ({**it, "amount": round(it["amount"], 2)} for it in g["items"].values()),
+            key=lambda it: -it["amount"])
+    return {"events": out, "currency": currency}
+
+
+@router.get("/sales.csv")
+def sales_csv(db: Session = Depends(get_session)):
+    """Relación de ventas para contabilidad: una fila por línea vendida."""
+    rows = db.scalars(select(Sale).order_by(Sale.created_at.desc())).all()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["mes", "fecha", "hora", "evento", "producto", "sku", "cantidad",
+                "precio_unitario", "importe", "metodo_pago", "venta_id",
+                "total_venta", "moneda"])
+    for s_ in rows:
+        # Fechas en hora local del negocio (TZ del contenedor): una venta de
+        # bazar cobrada a las 7pm es de ESE día para el contador, no del
+        # siguiente como diría la UTC.
+        loc = _sale_local(s_.created_at)
+        mes = loc.strftime("%Y-%m") if loc else ""
+        fecha = loc.strftime("%Y-%m-%d") if loc else ""
+        hora = loc.strftime("%H:%M") if loc else ""
+        for line in s_.items or []:
+            qty = line.get("qty") or 0
+            price = line.get("price") or 0.0
+            w.writerow([
+                mes, fecha, hora, s_.event or "",
+                line.get("name") or "", line.get("sku") or "",
+                qty, price, round(price * qty, 2),
+                s_.payment_method or "", s_.id, s_.total, s_.currency or "",
+            ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=m3dnexus_ventas.csv"},
+    )
 
 
 @router.post("/sales", status_code=201)
@@ -1280,9 +1389,11 @@ def expenses_summary(db: Session = Depends(get_session)):
         key = o.created_at.strftime("%Y-%m") if o.created_at else "sin-fecha"
         month_row(key)["income"] += o.agreed_price
 
-    # Ventas de mostrador (bazar): también son ingresos del mes.
+    # Ventas de mostrador (bazar): también son ingresos del mes. En hora
+    # local del negocio, como el CSV de ventas.
     for s_ in db.scalars(select(Sale)).all():
-        key = s_.created_at.strftime("%Y-%m") if s_.created_at else "sin-fecha"
+        loc = _sale_local(s_.created_at)
+        key = loc.strftime("%Y-%m") if loc else "sin-fecha"
         month_row(key)["sales"] += s_.total or 0.0
 
     out = sorted(months.values(), key=lambda x: x["month"], reverse=True)

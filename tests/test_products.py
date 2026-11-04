@@ -121,6 +121,37 @@ def test_venta_descuenta_stock_y_congela_lineas(env):
         "items": [{"product_id": 999, "qty": 1}]}).status_code == 404
 
 
+def test_resumen_por_evento_y_csv(env):
+    p = env.post("/api/products", json={"name": "Llavero", "price": 80,
+                                        "stock": 20}).json()
+    env.post("/api/sales", json={"items": [{"product_id": p["id"], "qty": 2}],
+                                 "payment_method": "efectivo", "event": "Bazar Nov"})
+    env.post("/api/sales", json={"items": [{"product_id": p["id"], "qty": 1},
+                                           {"name": "Moño", "price": 10, "qty": 1}],
+                                 "payment_method": "tarjeta", "event": "Bazar Nov"})
+    env.post("/api/sales", json={"items": [{"product_id": p["id"], "qty": 1}]})
+
+    d = env.get("/api/sales/summary").json()
+    evs = {g["event"]: g for g in d["events"]}
+    g = evs["Bazar Nov"]
+    assert g["n_sales"] == 2 and g["pieces"] == 4
+    assert g["total"] == 250.0                       # 160 + 80 + 10
+    assert g["by_payment"] == {"efectivo": 160.0, "tarjeta": 90.0}
+    # Items agregados: 3 llaveros juntos, ordenados por importe.
+    assert g["items"][0]["sku"] == p["sku"] and g["items"][0]["qty"] == 3
+    assert g["items"][0]["amount"] == 240.0
+    assert g["items"][1]["name"] == "Moño"
+    assert len(g["sales"]) == 2                      # detalle de cada cobro
+    # La venta sin evento cae en su cajón mensual.
+    assert any(k.startswith("Sin evento · ") for k in evs)
+
+    csv_text = env.get("/api/sales.csv").text
+    lines = csv_text.strip().splitlines()
+    assert lines[0].startswith("mes,fecha,hora,evento,producto,sku")
+    assert len(lines) == 1 + 4                       # una fila por línea vendida
+    assert sum("Bazar Nov" in ln for ln in lines) == 3
+
+
 def test_ventas_entran_a_la_rentabilidad(env):
     p = env.post("/api/products", json={"name": "Figura", "price": 100,
                                         "stock": 10}).json()

@@ -5027,7 +5027,7 @@ async function posStartScan() {
   const ov = document.getElementById("pos-scanner");
   ov.innerHTML = `<div class="modal-box pos-scanbox">
     <div class="mp-top"><strong>Escanea la etiqueta</strong>
-      <span class="muted" id="pos-scan-status">apunta al QR…</span>
+      <span class="muted" id="pos-scan-status">apunta al QR a ~15 cm (si se ve borroso, aléjalo)</span>
       <span class="spacer"></span>
       <button class="btn ghost small" id="pos-scan-close">✕</button></div>
     <video id="pos-video" playsinline autoplay muted></video>
@@ -5036,7 +5036,15 @@ async function posStartScan() {
   const video = ov.querySelector("#pos-video");
   try {
     posStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" }, audio: false });
+      video: {
+        facingMode: "environment",
+        // Resolución alta: con la de por defecto (640×480) hay que pegar la
+        // etiqueta a la cámara, y de tan cerca el lente del iPhone queda por
+        // debajo de su distancia mínima de enfoque → imagen borrosa. Así se
+        // puede escanear desde ~15-20 cm, donde sí enfoca.
+        width: { ideal: 1920 }, height: { ideal: 1080 },
+      },
+      audio: false });
   } catch (err) {
     posStopScan();
     toast("No se pudo abrir la cámara: " + err.message);
@@ -5044,6 +5052,20 @@ async function posStartScan() {
   }
   video.srcObject = posStream;
   try { await video.play(); } catch { /* iOS a veces lo rechaza; autoplay lo cubre */ }
+
+  // Enfoque continuo y, en el camino jsQR (iOS), zoom 2× si el navegador lo
+  // expone (Safari 17+): con zoom el QR se ve grande desde lejos, sin entrar
+  // en la zona donde el lente no enfoca. "advanced" ignora lo no soportado.
+  try {
+    const track = posStream.getVideoTracks()[0];
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    const adv = [];
+    if (Array.isArray(caps.focusMode) && caps.focusMode.includes("continuous"))
+      adv.push({ focusMode: "continuous" });
+    if (!nativo && caps.zoom && (caps.zoom.max || 1) >= 2)
+      adv.push({ zoom: Math.min(2, caps.zoom.max) });
+    if (adv.length) await track.applyConstraints({ advanced: adv });
+  } catch { /* mejoras opcionales: si fallan, el escáner sigue */ }
 
   if (nativo) {
     const detector = new BarcodeDetector({ formats: ["qr_code"] });
@@ -5059,7 +5081,10 @@ async function posStartScan() {
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     posScanTimer = setInterval(() => {
       if (!video.videoWidth) return;
-      const w = 480;
+      // 800px: con 480 un QR pequeño a 15-20 cm queda con muy pocos píxeles
+      // por módulo y jsQR no lo resuelve (el nativo de Android ve el frame
+      // completo, por eso allá no hacía falta).
+      const w = Math.min(800, video.videoWidth);
       const h = Math.round(video.videoHeight / video.videoWidth * w);
       canvas.width = w; canvas.height = h;
       ctx.drawImage(video, 0, 0, w, h);

@@ -430,6 +430,46 @@ Detectados en la revisión del **2026-07-22** contra la BD en producción
   CSV del contador (`/api/sales.csv`) en hora local del negocio (TZ del
   contenedor, `America/Mexico_City` por defecto en el compose). Pendiente:
   avisos de stock bajo / reposición ligada a Impresiones.
+- [ ] **Cobro con tarjeta desde el POS (API de PinPad de Clip)** — pausado
+  hasta tener terminal compatible (la actual es un lector básico). La API
+  manda el monto directo a la terminal al tocar Cobrar con "tarjeta"; NO hay
+  deep link para la app de Clip del teléfono. Investigado (nov 2026), contrato
+  verificado por terceros contra un lector real
+  ([vim-pos PR #192](https://github.com/Fermin03/vim-pos/pull/192), guía
+  oficial `developer.payclip.com/guides/pinpad-api`):
+  - Solo terminales inteligentes: **Total 3, Ultra, Clip PinPad, Stand 2**
+    (confirmado por Clip). Hay que pedir a Clip que instale la app PinPad en
+    la terminal (~3 min) y crear credenciales en *Panel de Desarrollador >
+    Credenciales* (API key + secreto, Basic auth `base64(key:secret)`).
+  - Base `https://api.payclip.io/f2f/pinpad/v1`: `POST /payment` con
+    `{amount: number, reference: <ÚNICA por intento, una repetida confunde
+    estados>, serial_number_pos, preferences: {is_tip_enabled, tip_options,
+    is_auto_return_enabled, ...}}` → `pinpad_request_id`. `GET
+    /payment?pinpadRequestId=…` + header `Pinpad-Include-Detail: true` para
+    poll (estados `PENDING→IN_PROCESS→APPROVED|CANCELED|REJECTED`; la
+    transacción aprobada dice `status:"approved"` en minúsculas y la propina
+    YA viene dentro de `paid_amount`). `DELETE /payment/{id}` solo antes de
+    que el lector lo tome (si ya lo tomó: 400 `PAYMENT_REQUEST_ISSUE`, se
+    cancela en el lector); `DELETE /payment/serial-number/{serie}` para
+    creaciones sin respuesta. `GET /devices/status?serial_number=` para saber
+    si el lector está activo; `POST /devices` configura `timeout_seg` (sin él
+    un cobro queda `IN_PROCESS` para siempre). Reembolsos:
+    `POST https://api.payclip.com/refunds` (dominio .com) con
+    `{reference: {type: "transaction", id: <transaction_id>}, amount}`.
+  - Gotchas: no hay modo de prueba (el primer cobro real es la prueba); el
+    webhook no va firmado → confirmar SIEMPRE consultando (nosotros: solo
+    polling, el server no es público); 401 = credenciales malas, `ERR10_04` /
+    `PINPAD_TERMINAL_TIMEOUT_EXCEPTION` = terminal apagada o sin internet;
+    motivo de rechazo en `error.code` (p.ej. `CD-PROCESS-AS-CHIP` = la
+    tarjeta exige chip); autorización del banco en
+    `detail.results[].private_data.psp_data.authorization_id`.
+  - Plan M3D Nexus: ajustes `clip_api_key`/`clip_secret`/`clip_serial` (+
+    botón "probar" con devices/status), `POST /api/clip/charge` desde Cobrar
+    cuando el método es tarjeta, modal de espera con poll y la venta se
+    registra solo al quedar `APPROVED` (con botón "registrar sin terminal").
+  - Alternativa equivalente: Mercado Pago Point Smart 2 con la API de
+    integraciones presenciales de MP (mismo patrón; fue el primer proveedor
+    de vim-pos).
 - [ ] **Tarifa de operación eléctrica por hora** (opción B, sustituto fino del
   multiplicador actual): medir una semana el taller completo (Kill-A-Watt),
   restar los kWh ya atribuidos a impresiones y repartir el residuo (standby +

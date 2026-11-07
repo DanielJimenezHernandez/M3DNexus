@@ -4854,6 +4854,18 @@ function renderPosCart() {
 
 async function posCharge() {
   if (!posCart.length) return;
+  // Con "tarjeta" y la Point configurada, el cobro va primero a la terminal
+  // y la venta se registra solo cuando el pago queda aprobado.
+  if (posPayMethod === "tarjeta" && appSettings
+      && appSettings.mp_configured && appSettings.mp_device_id) {
+    posTerminalFlow();
+    return;
+  }
+  await posRegisterSale();
+}
+
+// Registra la venta en el sistema (lo que antes era todo posCharge).
+async function posRegisterSale() {
   const event = document.getElementById("pos-event").value.trim();
   localStorage.setItem("posEvent", event);
   try {
@@ -4870,6 +4882,96 @@ async function posCharge() {
     try { posSummary = await api.get("/api/sales/summary"); } catch {}
     renderPosCart(); renderPosToday(); renderPosHistory();
   } catch (e) { toast("Error: " + e.message); }
+}
+
+// --- Cobro con la terminal Mercado Pago Point --------------------------------
+let posMpIntent = null;
+let posMpPoll = null;
+
+function posMpStop() {
+  if (posMpPoll) { clearInterval(posMpPoll); posMpPoll = null; }
+  posMpIntent = null;
+  const ov = document.getElementById("pos-terminal");
+  ov.hidden = true; ov.innerHTML = "";
+}
+
+function posMpStatus(txt) {
+  const el = document.getElementById("pos-mp-status");
+  if (el) el.textContent = txt;
+}
+
+const MP_STATE_TXT = {
+  OPEN: "mandado a la terminal…",
+  ON_TERMINAL: "en la pantalla de la terminal — que el cliente pague",
+  PROCESSING: "procesando el pago…",
+};
+
+async function posTerminalFlow() {
+  const total = Math.round(posCart.reduce((a, l) => a + l.price * l.qty, 0) * 100) / 100;
+  const ov = document.getElementById("pos-terminal");
+  ov.innerHTML = `<div class="modal-box pos-scanbox">
+    <div class="mp-top"><strong>Cobro con tarjeta</strong>
+      <span class="spacer"></span>
+      <button class="btn ghost small" id="pos-mp-close">✕</button></div>
+    <p class="pos-total" style="margin:.4rem 0;text-align:center">${money2(total, currency)}</p>
+    <p class="muted" id="pos-mp-status" style="text-align:center">mandando a la terminal…</p>
+    <div class="toolbar" style="justify-content:center;gap:.6rem;flex-wrap:wrap">
+      <button class="btn danger small" id="pos-mp-cancel">Cancelar cobro</button>
+      <button class="btn ghost small" id="pos-mp-manual"
+        title="Registra la venta sin esperar a la terminal (p.ej. si cobraste a mano)">Registrar sin terminal</button>
+    </div>
+  </div>`;
+  ov.hidden = false;
+  // Cerrar = abandonar el seguimiento SIN registrar la venta (el carrito queda).
+  ov.querySelector("#pos-mp-close").onclick = async () => {
+    const id = posMpIntent;
+    posMpStop();
+    if (id) { try { await api.send(`/api/mp/charge/${id}`, "DELETE"); } catch {} }
+  };
+  ov.querySelector("#pos-mp-cancel").onclick = async () => {
+    if (!posMpIntent) { posMpStop(); return; }
+    try {
+      await api.send(`/api/mp/charge/${posMpIntent}`, "DELETE");
+      posMpStop();
+      toast("Cobro cancelado");
+    } catch {
+      // Ya lo tomó la terminal: ahí se cancela (botón atrás de la Point).
+      posMpStatus("Ya está en la terminal: cancélalo ahí, o espera el resultado");
+    }
+  };
+  ov.querySelector("#pos-mp-manual").onclick = async () => {
+    const id = posMpIntent;
+    posMpStop();
+    if (id) { try { await api.send(`/api/mp/charge/${id}`, "DELETE"); } catch {} }
+    await posRegisterSale();
+  };
+
+  let r;
+  try {
+    r = await api.send("/api/mp/charge", "POST", { amount: total });
+  } catch (e) {
+    posMpStatus("Error: " + e.message + " — puedes registrar sin terminal");
+    return;
+  }
+  posMpIntent = r.intent_id;
+  posMpStatus("mandado a la terminal…");
+  posMpPoll = setInterval(async () => {
+    if (!posMpIntent) return;
+    let st;
+    try { st = await api.get(`/api/mp/charge/${posMpIntent}`); } catch { return; }
+    if (st.approved === true) {
+      posMpStop();
+      toast(`Tarjeta aprobada${st.card_last4 ? " ····" + st.card_last4 : ""} ✔`);
+      await posRegisterSale();
+    } else if (st.approved === false) {
+      clearInterval(posMpPoll); posMpPoll = null; posMpIntent = null;
+      posMpStatus(st.state === "CANCELED" || st.state === "CANCELLED"
+        ? "El cobro se canceló en la terminal"
+        : `No se cobró: ${st.detail || st.state} — cierra e inténtalo de nuevo`);
+    } else {
+      posMpStatus(MP_STATE_TXT[st.state] || `estado: ${st.state}`);
+    }
+  }, 2000);
 }
 
 function renderPosToday() {
@@ -5321,7 +5423,81 @@ async function loadSettings() {
   document.getElementById("set-quote-terms").value = s.quote_terms || "";
   document.getElementById("set-orders-folder").value = s.orders_folder_base || "";
   showLogo(s.company_logo || "");
+  // Terminal Mercado Pago: el token no regresa del servidor, solo su cola.
+  const tok = document.getElementById("set-mp-token");
+  tok.value = "";
+  tok.placeholder = s.mp_configured
+    ? `guardado (····${s.mp_token_tail}) — pega uno nuevo para cambiarlo`
+    : "APP_USR-…";
+  const sel = document.getElementById("set-mp-device");
+  sel.innerHTML = `<option value="">— sin terminal —</option>` + (s.mp_device_id
+    ? `<option value="${escHtml(s.mp_device_id)}" selected>${escHtml(s.mp_device_name || s.mp_device_id)}</option>`
+    : "");
+  document.getElementById("set-mp-print").checked = s.mp_print_receipt !== false;
+  document.getElementById("set-mp-disconnect").hidden = !s.mp_configured;
+  document.getElementById("set-mp-mode").hidden = true;
 }
+
+// --- Terminal Mercado Pago Point (Ajustes) -----------------------------------
+let mpDevices = [];   // [{id, operating_mode}] de la última detección
+
+function mpRefreshModeBtn() {
+  const sel = document.getElementById("set-mp-device");
+  const btn = document.getElementById("set-mp-mode");
+  const dev = mpDevices.find((d) => d.id === sel.value);
+  btn.hidden = !dev;
+  if (!dev) return;
+  const pdv = dev.operating_mode === "PDV";
+  btn.textContent = pdv ? "En modo PDV ✓ (volver a normal)" : "⚠ Activar modo PDV";
+  btn.classList.toggle("warn-btn", !pdv);
+}
+
+document.getElementById("set-mp-detect").addEventListener("click", async () => {
+  const btn = document.getElementById("set-mp-detect");
+  btn.disabled = true; btn.textContent = "Buscando…";
+  try {
+    const r = await api.get("/api/mp/devices");
+    mpDevices = r.devices || [];
+    const sel = document.getElementById("set-mp-device");
+    const prev = sel.value || (appSettings && appSettings.mp_device_id) || "";
+    sel.innerHTML = `<option value="">— sin terminal —</option>` + mpDevices.map((d) =>
+      `<option value="${escHtml(d.id)}">${escHtml(d.id)} · ${escHtml(d.operating_mode || "?")}</option>`).join("");
+    if (mpDevices.some((d) => d.id === prev)) sel.value = prev;
+    else if (mpDevices.length === 1) sel.value = mpDevices[0].id;
+    mpRefreshModeBtn();
+    toast(mpDevices.length
+      ? `${mpDevices.length} terminal(es) — elige y pulsa Guardar`
+      : "Sin terminales: vincula la Point a tu cuenta en la app de MP");
+  } catch (e) { toast("Error: " + e.message); }
+  btn.disabled = false; btn.textContent = "Detectar";
+});
+
+document.getElementById("set-mp-device").addEventListener("change", mpRefreshModeBtn);
+
+document.getElementById("set-mp-mode").addEventListener("click", async () => {
+  const sel = document.getElementById("set-mp-device");
+  const dev = mpDevices.find((d) => d.id === sel.value);
+  if (!dev) return;
+  const target = dev.operating_mode === "PDV" ? "STANDALONE" : "PDV";
+  try {
+    await api.send("/api/mp/device-mode", "POST",
+      { device_id: dev.id, operating_mode: target });
+    dev.operating_mode = target;
+    mpRefreshModeBtn();
+    toast(target === "PDV"
+      ? "Modo PDV activado: la terminal ya recibe cobros del POS"
+      : "Modo normal: la terminal vuelve a su teclado");
+  } catch (e) { toast("Error: " + e.message); }
+});
+
+document.getElementById("set-mp-disconnect").addEventListener("click", async () => {
+  if (!confirm("¿Quitar el token y la terminal de Mercado Pago?")) return;
+  appSettings = await api.send("/api/settings", "PUT",
+    { mp_access_token: "", mp_device_id: "", mp_device_name: "" });
+  mpDevices = [];
+  await loadSettings();
+  toast("Terminal desconectada");
+});
 
 // El logo se guarda como data URI para poder incrustarlo en el PDF: si fuera una
 // URL, la impresión se dispara antes de que la imagen cargue y sale el hueco.
@@ -5368,9 +5544,15 @@ document.getElementById("save-settings").addEventListener("click", async () => {
       payment_info: document.getElementById("set-payment-info").value,
       quote_terms: document.getElementById("set-quote-terms").value,
       orders_folder_base: document.getElementById("set-orders-folder").value,
+      // El token solo viaja si se escribió uno nuevo (vacío = sin cambio).
+      mp_access_token: document.getElementById("set-mp-token").value.trim() || undefined,
+      mp_device_id: document.getElementById("set-mp-device").value,
+      mp_device_name: document.getElementById("set-mp-device").value,
+      mp_print_receipt: document.getElementById("set-mp-print").checked,
     });
     currency = appSettings.currency;
     applyBrand();            // el logo del panel se actualiza al guardarlo
+    await loadSettings();    // refresca p.ej. la cola del token de MP guardado
     toast("Ajustes guardados");
   } catch (e) {
     toast("Error: " + e.message);

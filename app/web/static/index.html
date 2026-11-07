@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>M3D Nexus — gestión de impresión 3D</title>
-  <link rel="stylesheet" href="/style.css?v=128" />
+  <link rel="stylesheet" href="/style.css?v=130" />
 </head>
 <body>
   <!-- Panel lateral colapsable. Los botones conservan data-tab: es la clave que
@@ -85,6 +85,7 @@
       <div id="pos-today"></div>
       <div id="pos-history"></div>
       <div id="pos-scanner" class="modal-ov" hidden></div>
+      <div id="pos-terminal" class="modal-ov" hidden></div>
     </section>
 
     <!-- Gastos del negocio (contabilidad / rentabilidad) -->
@@ -396,12 +397,38 @@
           por su número de carpeta (p.ej. <code>…\Pedidos\112</code>). Es solo una referencia para
           encontrar tus STL/3MF localmente; el servidor no accede a esa carpeta.</p>
       </div>
+
+      <h2>Terminal Mercado Pago Point</h2>
+      <div class="card" style="max-width:560px">
+        <label class="field">
+          <span>Access token de producción (<em>Tus integraciones → tu app → Credenciales de producción</em>)</span>
+          <input type="password" id="set-mp-token" placeholder="APP_USR-…" autocomplete="off" />
+        </label>
+        <div class="field">
+          <span>Terminal para los cobros del punto de venta</span>
+          <div class="toolbar" style="margin:0;gap:.4rem">
+            <select id="set-mp-device" style="flex:1;min-width:0">
+              <option value="">— sin terminal —</option>
+            </select>
+            <button type="button" class="btn ghost small" id="set-mp-detect">Detectar</button>
+            <button type="button" class="btn ghost small" id="set-mp-mode" hidden></button>
+          </div>
+          <small class="muted" id="set-mp-hint">Guarda el token y pulsa Detectar. Para recibir
+            cobros del POS la terminal debe estar en <strong>modo PDV</strong>; en ese modo no se
+            puede teclear el monto en la terminal misma (aquí se cambia de modo cuando quieras).</small>
+        </div>
+        <label class="q-fold-wrap"><input type="checkbox" id="set-mp-print" checked>
+          Imprimir recibo en la terminal</label>
+        <div class="toolbar" style="margin-top:.4rem">
+          <button type="button" class="btn danger small" id="set-mp-disconnect" hidden>Desconectar terminal</button>
+        </div>
+      </div>
       <button class="btn" id="save-settings">Guardar</button>
     </section>
   </main>
 
   <div class="toast" id="toast"></div>
   <script src="/vendor/qrcode.min.js"></script>
-  <script src="/app.js?v=129"></script>
+  <script src="/app.js?v=130"></script>
 </body>
 </html>

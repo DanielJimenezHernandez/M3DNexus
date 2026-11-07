@@ -7,6 +7,7 @@ import binascii
 import csv
 import io
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -33,6 +34,10 @@ from ..models import (
     SETTING_CURRENCY,
     SETTING_ELECTRICITY_PRICE,
     SETTING_ENERGY_OVERHEAD,
+    SETTING_MP_DEVICE,
+    SETTING_MP_DEVICE_NAME,
+    SETTING_MP_PRINT,
+    SETTING_MP_TOKEN,
     SETTING_ORDERS_FOLDER_BASE,
     SETTING_PAYMENT_INFO,
     SETTING_QUOTE_TERMS,
@@ -51,6 +56,8 @@ from ..models import (
 from ..schemas import (
     AssignMaterialIn,
     BusinessExpenseIn,
+    MPChargeIn,
+    MPDeviceModeIn,
     ProductIn,
     SaleIn,
     JobOut,
@@ -85,6 +92,7 @@ from ..services.ingest import (
     get_energy_factor,
     get_settings,
 )
+from ..services import mpoint
 from ..services.loaded import resolve_slots, set_slots
 from ..services.orca_import import apply_import, plan_import
 from ..services.projects import avg_price_per_type, resolve_project
@@ -1338,6 +1346,105 @@ def delete_sale(sale_id: int, db: Session = Depends(get_session)):
 
 
 # --------------------------------------------------------------------------- #
+# Terminal Mercado Pago Point (cobro con tarjeta desde el POS)
+# --------------------------------------------------------------------------- #
+def _mp_token(db: Session) -> str:
+    token = _get_setting(db, SETTING_MP_TOKEN)
+    if not token:
+        raise HTTPException(400, "Configura el access token de Mercado Pago en Ajustes")
+    return token
+
+
+def _mp_device(db: Session) -> str:
+    device = _get_setting(db, SETTING_MP_DEVICE)
+    if not device:
+        raise HTTPException(400, "Elige tu terminal Point en Ajustes")
+    return device
+
+
+@router.get("/mp/devices")
+def mp_devices(db: Session = Depends(get_session)):
+    """Terminales Point de la cuenta (para elegir una en Ajustes)."""
+    try:
+        return {"devices": mpoint.list_devices(_mp_token(db))}
+    except mpoint.MPointError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@router.post("/mp/device-mode")
+def mp_device_mode(data: MPDeviceModeIn, db: Session = Depends(get_session)):
+    """Cambia la terminal entre PDV (acepta cobros por API) y STANDALONE."""
+    try:
+        mpoint.set_operating_mode(_mp_token(db), data.device_id, data.operating_mode)
+    except mpoint.MPointError as exc:
+        raise HTTPException(502, str(exc))
+    return {"device_id": data.device_id, "operating_mode": data.operating_mode}
+
+
+@router.post("/mp/charge", status_code=201)
+def mp_charge(data: MPChargeIn, db: Session = Depends(get_session)):
+    """Manda el monto a la terminal: crea la intención de pago en el device."""
+    token, device = _mp_token(db), _mp_device(db)
+    cents = round(data.amount * 100)   # MP exige centavos sin decimales
+    reference = data.reference or f"m3dnexus-pos-{datetime.now(timezone.utc):%Y%m%d%H%M%S%f}"
+    try:
+        intent = mpoint.create_intent(
+            token, device, cents, reference,
+            print_receipt=_get_setting(db, SETTING_MP_PRINT) != "0",
+        )
+    except mpoint.MPointError as exc:
+        raise HTTPException(502, str(exc))
+    return {"intent_id": intent.get("id"), "amount_cents": cents,
+            "reference": reference}
+
+
+@router.get("/mp/charge/{intent_id}")
+def mp_charge_status(intent_id: str, db: Session = Depends(get_session)):
+    """Estado de la intención. `approved` queda None mientras siga en curso.
+
+    FINISHED no implica cobrado: se confirma leyendo el pago y exigiendo
+    status == "approved" (una tarjeta rechazada también "termina").
+    """
+    token = _mp_token(db)
+    try:
+        intent = mpoint.get_intent(token, intent_id)
+    except mpoint.MPointError as exc:
+        raise HTTPException(502, str(exc))
+    state = str(intent.get("state") or "").upper()
+    out = {"state": state, "approved": None, "detail": None,
+           "payment_id": None, "card_last4": None}
+    if state in ("CANCELED", "CANCELLED", "ABANDONED", "ERROR"):
+        out["approved"] = False
+        out["detail"] = state
+    elif state == "FINISHED":
+        payment_id = (intent.get("payment") or {}).get("id")
+        if not payment_id:
+            out["approved"] = False
+            out["detail"] = "Terminó sin pago registrado; revisa en la app de MP"
+        else:
+            try:
+                payment = mpoint.get_payment(token, str(payment_id))
+            except mpoint.MPointError as exc:
+                raise HTTPException(502, str(exc))
+            out["payment_id"] = payment_id
+            out["approved"] = payment.get("status") == "approved"
+            out["detail"] = payment.get("status_detail") or payment.get("status")
+            out["card_last4"] = (payment.get("card") or {}).get("last_four_digits")
+    return out
+
+
+@router.delete("/mp/charge/{intent_id}")
+def mp_charge_cancel(intent_id: str, db: Session = Depends(get_session)):
+    """Cancela la intención (solo mientras siga OPEN; si no, en la terminal)."""
+    try:
+        mpoint.cancel_intent(_mp_token(db), _mp_device(db), intent_id)
+    except mpoint.MPointError as exc:
+        # 409: el front avisa "cancélalo en la terminal" sin tratarlo como caída.
+        raise HTTPException(409, str(exc))
+    return {"canceled": True}
+
+
+# --------------------------------------------------------------------------- #
 # Gastos del negocio (contabilidad / rentabilidad)
 # --------------------------------------------------------------------------- #
 def _expense_dict(x: BusinessExpense, db: Session) -> dict:
@@ -1931,6 +2038,11 @@ def _settings_out(db: Session) -> SettingsOut:
         payment_info=_get_setting(db, SETTING_PAYMENT_INFO),
         quote_terms=_get_setting(db, SETTING_QUOTE_TERMS),
         orders_folder_base=_get_setting(db, SETTING_ORDERS_FOLDER_BASE),
+        mp_configured=bool(_get_setting(db, SETTING_MP_TOKEN)),
+        mp_token_tail=_get_setting(db, SETTING_MP_TOKEN)[-4:],
+        mp_device_id=_get_setting(db, SETTING_MP_DEVICE),
+        mp_device_name=_get_setting(db, SETTING_MP_DEVICE_NAME),
+        mp_print_receipt=_get_setting(db, SETTING_MP_PRINT) != "0",
     )
 
 
@@ -1967,6 +2079,14 @@ def update_settings(data: SettingsIn, db: Session = Depends(get_session)):
         _set_setting(db, SETTING_QUOTE_TERMS, data.quote_terms)
     if data.orders_folder_base is not None:
         _set_setting(db, SETTING_ORDERS_FOLDER_BASE, data.orders_folder_base)
+    if data.mp_access_token is not None:
+        _set_setting(db, SETTING_MP_TOKEN, data.mp_access_token.strip())
+    if data.mp_device_id is not None:
+        _set_setting(db, SETTING_MP_DEVICE, data.mp_device_id.strip())
+    if data.mp_device_name is not None:
+        _set_setting(db, SETTING_MP_DEVICE_NAME, data.mp_device_name.strip())
+    if data.mp_print_receipt is not None:
+        _set_setting(db, SETTING_MP_PRINT, "1" if data.mp_print_receipt else "0")
     db.commit()
     return _settings_out(db)
 

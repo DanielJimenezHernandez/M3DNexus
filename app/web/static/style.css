@@ -188,6 +188,7 @@ textarea { resize: vertical; font-family: inherit; }
   border-bottom: 1px solid var(--border); font-size: 0.88rem; }
 .pos-sitems { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
+.warn-btn { border-color: var(--warn); color: var(--warn); }
 .pos-event { border-bottom: 1px solid var(--border); }
 .pos-event > summary { display: flex; align-items: center; gap: 0.6rem;
   padding: 0.5rem 0; cursor: pointer; list-style: none; flex-wrap: wrap; }

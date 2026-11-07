@@ -601,3 +601,9 @@ SETTING_QUOTE_TERMS = "quote_terms"
 # Ruta base de la carpeta local "Pedidos" (en el equipo del usuario). Cada
 # pedido cuelga de <base>/<folder>. Solo se guarda como texto para componerla.
 SETTING_ORDERS_FOLDER_BASE = "orders_folder_base"
+# Terminal Mercado Pago Point: el token nunca vuelve completo al navegador
+# (solo los últimos 4). El device es la terminal elegida para los cobros.
+SETTING_MP_TOKEN = "mp_access_token"
+SETTING_MP_DEVICE = "mp_device_id"
+SETTING_MP_DEVICE_NAME = "mp_device_name"
+SETTING_MP_PRINT = "mp_print_receipt"

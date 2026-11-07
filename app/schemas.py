@@ -147,6 +147,12 @@ class SettingsOut(BaseModel):
     payment_info: str = ""
     quote_terms: str = ""
     orders_folder_base: str = ""
+    # Terminal Mercado Pago Point: el token nunca regresa completo.
+    mp_configured: bool = False
+    mp_token_tail: str = ""
+    mp_device_id: str = ""
+    mp_device_name: str = ""
+    mp_print_receipt: bool = True
 
 
 class SettingsIn(BaseModel):
@@ -159,6 +165,11 @@ class SettingsIn(BaseModel):
     payment_info: str | None = None
     quote_terms: str | None = None
     orders_folder_base: str | None = None
+    # None = sin cambio; "" = borrar el token / quitar la terminal.
+    mp_access_token: str | None = None
+    mp_device_id: str | None = None
+    mp_device_name: str | None = None
+    mp_print_receipt: bool | None = None
 
     @field_validator("company_logo")
     @classmethod
@@ -339,6 +350,18 @@ class SaleIn(BaseModel):
     items: list[SaleItemIn]
     payment_method: str | None = None   # efectivo | tarjeta | transferencia | otro
     event: str | None = None            # nombre del bazar / evento
+
+
+class MPChargeIn(BaseModel):
+    """Cobro mandado a la terminal Mercado Pago Point."""
+
+    amount: float = Field(gt=0)
+    reference: str | None = None
+
+
+class MPDeviceModeIn(BaseModel):
+    device_id: str
+    operating_mode: str = Field(pattern="^(PDV|STANDALONE)$")
 
 
 class BusinessExpenseIn(BaseModel):

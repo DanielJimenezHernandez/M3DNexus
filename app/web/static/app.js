@@ -4600,14 +4600,20 @@ async function loadProductos() {
   renderProductos();
 }
 
-function renderProductos() {
+// Filtros vigentes de la vista (búsqueda, categoría, inactivos): los usa la
+// cuadrícula y también la lista imprimible, para que "lo que ves es lo que sale".
+function visibleProductos() {
   const q = (document.getElementById("pr-search").value || "").toLowerCase();
   const cat = document.getElementById("pr-cat").value;
   const showInactive = document.getElementById("pr-inactive").checked;
-  const rows = productos.filter((p) =>
+  return productos.filter((p) =>
     (showInactive || p.active)
     && (!cat || p.category === cat)
     && (!q || `${p.name} ${p.sku || ""} ${p.category || ""}`.toLowerCase().includes(q)));
+}
+
+function renderProductos() {
+  const rows = visibleProductos();
   const host = document.getElementById("products-grid");
   if (!rows.length) {
     host.innerHTML = `<p class="muted">Sin productos. Crea el primero con “+ Nuevo producto”.</p>`;
@@ -4762,7 +4768,82 @@ function printProductLabels(list) {
   w.print();
 }
 
+// Lista imprimible en hoja carta: foto, nombre, SKU, QR y precio, agrupada
+// por categoría. Se imprime cuando las fotos ya cargaron (si no, salen huecos).
+function printProductCatalog() {
+  const items = visibleProductos();
+  if (!items.length) return toast("No hay productos que listar");
+  const porCat = new Map();
+  items.forEach((p) => {
+    const c = (p.category || "Sin categoría").trim() || "Sin categoría";
+    if (!porCat.has(c)) porCat.set(c, []);
+    porCat.get(c).push(p);
+  });
+  const secciones = [...porCat.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], "es"))
+    .map(([c, list]) => `<h2>${escHtml(c)}</h2>` +
+      list.sort((a, b) => a.name.localeCompare(b.name, "es")).map((p) => {
+        let svg = "";
+        if (p.sku) {
+          const q = qrcode(0, "M");
+          q.addData(p.sku);
+          q.make();
+          svg = q.createSvgTag({ cellSize: 3, margin: 0, scalable: true });
+        }
+        const foto = p.photo_url
+          ? `<img src="${location.origin}${escHtml(p.photo_url)}" alt="">`
+          : `<div class="ph"></div>`;
+        return `<div class="row">
+          ${foto}
+          <div class="info">
+            <div class="name">${escHtml(p.name)}</div>
+            <div class="sku">${escHtml(p.sku || "")}</div>
+          </div>
+          <div class="qr">${svg}</div>
+          <div class="price">${money2(p.price, currency)}</div>
+        </div>`;
+      }).join(""))
+    .join("");
+  const empresa = (appSettings && appSettings.company_name) || "M3D Nexus";
+  const fecha = new Date().toLocaleDateString("es",
+    { day: "numeric", month: "long", year: "numeric" });
+  const w = window.open("", "_blank");
+  if (!w) return toast("El navegador bloqueó la ventana emergente");
+  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+    <title>Lista de productos</title><style>
+      @page { size: letter; margin: 14mm; }
+      body { font-family: system-ui, sans-serif; margin: 0; color: #111; }
+      header { display: flex; align-items: baseline; gap: 4mm;
+               border-bottom: 2px solid #111; padding-bottom: 2mm; }
+      h1 { font-size: 15pt; margin: 0; }
+      .meta { color: #555; font-size: 9pt; margin-left: auto; }
+      h2 { font-size: 11pt; margin: 5mm 0 1mm; border-bottom: 1px solid #bbb;
+           padding-bottom: 1mm; break-after: avoid; }
+      .row { display: flex; align-items: center; gap: 5mm; padding: 2.5mm 0;
+             border-bottom: 1px solid #e3e3e3; break-inside: avoid; }
+      .row img, .row .ph { width: 20mm; height: 20mm; object-fit: cover;
+             border-radius: 2mm; background: #f0f0f0; flex-shrink: 0; }
+      .info { flex: 1; min-width: 0; }
+      .name { font-weight: 600; font-size: 10.5pt; }
+      .sku { font-family: ui-monospace, monospace; font-size: 8.5pt; color: #555; }
+      .qr svg { width: 18mm; height: 18mm; display: block; }
+      .price { font-size: 12pt; font-weight: 700; min-width: 24mm; text-align: right;
+               font-variant-numeric: tabular-nums; }
+    </style></head><body>
+    <header><h1>${escHtml(empresa)} — Lista de productos</h1>
+      <span class="meta">${fecha} · ${items.length} producto${items.length === 1 ? "" : "s"}</span>
+    </header>${secciones}</body></html>`);
+  w.document.close();
+  const imgs = Array.from(w.document.images);
+  const listo = Promise.all(imgs.map((im) => (im.complete ? null
+    : new Promise((res) => { im.onload = im.onerror = res; }))));
+  // 4 s de tope: una foto que no cargue no debe bloquear la impresión.
+  Promise.race([listo, new Promise((res) => setTimeout(res, 4000))])
+    .then(() => { w.focus(); w.print(); });
+}
+
 document.getElementById("add-product").addEventListener("click", () => productForm());
+document.getElementById("pr-catalog").addEventListener("click", printProductCatalog);
 document.getElementById("pr-labels").addEventListener("click", () =>
   printProductLabels(productos.filter((p) => p.active)));
 document.getElementById("pr-search").addEventListener("input", renderProductos);

@@ -340,6 +340,12 @@
         <div class="inner">
           <div class="q-total"></div>
           <span class="spacer"></span>
+          <label class="q-fold-wrap" title="Cliente persona moral ante el SAT: te retiene el 1.25% de ISR sobre el Sub-Total; se resta del total a cobrar">
+            <input type="checkbox" id="q-ret-isr"> Empresa (ret. ISR 1.25%)
+          </label>
+          <label class="q-fold-wrap" title="Cotización de un servicio: retención de IVA de dos terceras partes del IVA trasladado; se resta del total a cobrar">
+            <input type="checkbox" id="q-ret-iva"> Servicio (ret. ⅔ IVA)
+          </label>
           <label class="q-fold-wrap" title="El costo de servicio y operario ya va repartido en el precio de cada ítem; el PDF solo muestra Sub-Total, envío, IVA y Total">
             <input type="checkbox" id="q-fold-servicio" checked> Sin desglose en el PDF
           </label>
@@ -430,6 +436,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/vendor/qrcode.min.js"></script>
-  <script src="/app.js?v=131"></script>
+  <script src="/app.js?v=132"></script>
 </body>
 </html>

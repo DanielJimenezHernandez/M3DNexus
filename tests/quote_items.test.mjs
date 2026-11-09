@@ -240,6 +240,43 @@ await t("ítem manual: precio directo sin margen, mezclado en el PDF", () => {
   doc.getElementById("print-quote").click();
   assert.ok(printedHtml.includes("1. Modelado CAD"), "no subió al primer lugar");
 });
+await t("retenciones: ISR 1.25% del subtotal y ⅔ del IVA, restadas del total", () => {
+  // El ejemplo del dueño: subtotal 3840, IVA 16% = 614.4, ret ISR = 48.
+  items().forEach((i) => i.querySelector(".q-remove").click());
+  const m = window.eval("addManualItem()");
+  setI(m, ".qm-desc", "Lote de piezas"); setI(m, ".qm-price", 3840); setI(m, ".qm-qty", 1);
+  setH("envio", 0);
+  doc.getElementById("q-ret-isr").checked = true;
+  doc.getElementById("q-ret-isr").dispatchEvent(new window.Event("change"));
+  let q = window.eval("quoteTotals()");
+  assert.ok(Math.abs(q.retIsr - 48) < 0.01, `retIsr ${q.retIsr}`);
+  assert.strictEqual(q.retIva, 0);
+  assert.ok(Math.abs(q.total - 4406.4) < 0.01, `total ${q.total}`);   // 3840+614.4−48
+  doc.getElementById("print-quote").click();
+  assert.ok(printedHtml.includes("Retención ISR (1.25%)"), "falta la fila de ISR");
+  assert.ok(!printedHtml.includes("Retención IVA"), "sobró la fila de ret IVA");
+
+  // Servicio: además retiene ⅔ del IVA (614.4 × 2/3 = 409.6).
+  doc.getElementById("q-ret-iva").checked = true;
+  doc.getElementById("q-ret-iva").dispatchEvent(new window.Event("change"));
+  q = window.eval("quoteTotals()");
+  assert.ok(Math.abs(q.retIva - 409.6) < 0.01, `retIva ${q.retIva}`);
+  assert.ok(Math.abs(q.total - 3996.8) < 0.01, `total ${q.total}`);
+  doc.getElementById("print-quote").click();
+  assert.ok(printedHtml.includes("Retención IVA (⅔ del IVA)"), "falta la fila de ret IVA");
+  // La barra resume las retenciones.
+  assert.ok(doc.querySelector("#cotiz-bar .q-total").textContent.includes("retenciones"));
+
+  // Desmarcadas: el total vuelve al clásico subtotal+IVA y las filas se van.
+  doc.getElementById("q-ret-isr").checked = false;
+  doc.getElementById("q-ret-iva").checked = false;
+  q = window.eval("quoteTotals()");
+  assert.ok(Math.abs(q.total - 4454.4) < 0.01, `total ${q.total}`);
+  doc.getElementById("print-quote").click();
+  assert.ok(!printedHtml.includes("Retención"), "sobraron filas de retención");
+  setH("envio", 200);
+});
+
 await t("sin ítems no imprime", () => {
   items().forEach((i) => i.querySelector(".q-remove").click());
   printedHtml = null;

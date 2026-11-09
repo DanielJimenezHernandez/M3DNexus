@@ -3864,6 +3864,23 @@ function quoteAggregate() {
   return { lines, acc };
 }
 
+/** Retenciones fiscales (SAT, México) — se RESTAN del total a cobrar:
+ · Cliente persona moral: retiene el 1.25% de ISR sobre el Sub-Total.
+ · Servicios: retención de IVA de dos terceras partes del IVA trasladado.
+Aplican igual a la cotización normal y a la venta directa. */
+function quoteRetenciones(subtotal, iva) {
+  return {
+    retIsr: document.getElementById("q-ret-isr").checked ? subtotal * 0.0125 : 0,
+    retIva: document.getElementById("q-ret-iva").checked ? iva * 2 / 3 : 0,
+  };
+}
+
+// Filas de retenciones para las tablas de totales (pantalla y PDF).
+function retencionRows(t) {
+  return (t.retIsr ? `<tr><td>Retención ISR (1.25%)</td><td class="num">− ${money(t.retIsr)}</td></tr>` : "")
+    + (t.retIva ? `<tr><td>Retención IVA (⅔ del IVA)</td><td class="num">− ${money(t.retIva)}</td></tr>` : "");
+}
+
 /** Totales del documento: margen sobre el coste de IMPRESIÓN sumado (los
 ítems manuales entran a precio directo, sin margen), luego envío e IVA. */
 function quoteTotals() {
@@ -3878,9 +3895,11 @@ function quoteTotals() {
   const envio = hnum("envio");
   const ivaPct = hnum("iva");
   const iva = (subtotal + envio) * ivaPct / 100;
+  const { retIsr, retIva } = quoteRetenciones(subtotal, iva);
   return { lines, acc, m, subtotal, materialTotal, servicioTotal,
            manualTotal: acc.manual,
-           envio, ivaPct, iva, total: subtotal + envio + iva };
+           envio, ivaPct, iva, retIsr, retIva,
+           total: subtotal + envio + iva - retIsr - retIva };
 }
 
 let cotizUid = 0;
@@ -4041,7 +4060,8 @@ function updateSale() {
   document.querySelector("#cotiz-bar .q-total").innerHTML =
     `<span class="bar-total">${money(q.total)}</span>` +
     `<span class="bar-detail muted"> · ${allItems().length} ítems · ${q.acc.unidades} ud` +
-    ` · venta ${money(q.subtotal)} + envío ${money(q.envio)} + IVA(${q.ivaPct}%) ${money(q.iva)}</span>`;
+    ` · venta ${money(q.subtotal)} + envío ${money(q.envio)} + IVA(${q.ivaPct}%) ${money(q.iva)}`
+    + (q.retIsr + q.retIva > 0 ? ` − retenciones ${money(q.retIsr + q.retIva)}` : "") + `</span>`;
   allItems().forEach(renderItemCost);
 }
 
@@ -4436,6 +4456,12 @@ document.getElementById("v-add-item").addEventListener("click", addVentaItem);
 ["v-envio", "v-iva"].forEach((id) =>
   document.getElementById(id).addEventListener("input", recalcVenta));
 
+// Las retenciones recalculan el modo activo (los checkboxes son compartidos).
+["q-ret-isr", "q-ret-iva"].forEach((id) =>
+  document.getElementById(id).addEventListener("change", () => {
+    if (cotizMode === "venta") recalcVenta(); else updateSale();
+  }));
+
 function ventaTotals() {
   const lines = ventaItems().map((item) => {
     const price = parseFloat(item.querySelector(".v-price").value) || 0;
@@ -4448,7 +4474,9 @@ function ventaTotals() {
   const envio = parseFloat(document.getElementById("v-envio").value) || 0;
   const ivaPct = parseFloat(document.getElementById("v-iva").value) || 0;
   const iva = (subtotal + envio) * (ivaPct / 100);
-  return { lines, subtotal, envio, ivaPct, iva, total: subtotal + envio + iva };
+  const { retIsr, retIva } = quoteRetenciones(subtotal, iva);
+  return { lines, subtotal, envio, ivaPct, iva, retIsr, retIva,
+           total: subtotal + envio + iva - retIsr - retIva };
 }
 
 function recalcVenta() {
@@ -4464,6 +4492,7 @@ function recalcVenta() {
     <tr><td>Sub-Total (${v.lines.length} ítems)</td><td class="num">${money(v.subtotal)}</td></tr>
     <tr><td>Servicio de envío</td><td class="num">${money(v.envio)}</td></tr>
     <tr><td>IVA (${v.ivaPct}%)</td><td class="num">${money(v.iva)}</td></tr>
+    ${retencionRows(v)}
     <tr><td><strong>Total</strong></td><td class="num"><strong>${money(v.total)}</strong></td></tr>
   </table>`;
   document.querySelector("#cotiz-bar .q-total").innerHTML =
@@ -4503,6 +4532,7 @@ function printVenta() {
       <tr><td>Sub-Total</td><td class="num">${money(v.subtotal)}</td></tr>
       <tr><td>Servicio de envío</td><td class="num">${money(v.envio)}</td></tr>
       <tr><td>IVA (${v.ivaPct}%)</td><td class="num">${money(v.iva)}</td></tr>
+      ${retencionRows(v)}
       <tr class="grand"><td>Total</td><td class="num">${money(v.total)}</td></tr>
     </table>
     ${brandTerms(s)}
@@ -4577,6 +4607,7 @@ function printCotiz() {
       <tr><td>Sub-Total</td><td class="num">${money(q.subtotal)}</td></tr>
       <tr><td>Servicio de envío</td><td class="num">${money(q.envio)}</td></tr>
       <tr><td>IVA (${q.ivaPct}%)</td><td class="num">${money(q.iva)}</td></tr>
+      ${retencionRows(q)}
       <tr class="grand"><td>Total</td><td class="num">${money(q.total)}</td></tr>
     </table>
     ${brandTerms(s)}

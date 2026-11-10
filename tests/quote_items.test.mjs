@@ -256,7 +256,7 @@ await t("retenciones: ISR 1.25% del subtotal y ⅔ del IVA, restadas del total",
   assert.ok(printedHtml.includes("Retención ISR (1.25%)"), "falta la fila de ISR");
   assert.ok(!printedHtml.includes("Retención IVA"), "sobró la fila de ret IVA");
 
-  // Servicio: además retiene ⅔ del IVA (614.4 × 2/3 = 409.6).
+  // Servicio a empresa: además retiene ⅔ del IVA (614.4 × 2/3 = 409.6).
   doc.getElementById("q-ret-iva").checked = true;
   doc.getElementById("q-ret-iva").dispatchEvent(new window.Event("change"));
   q = window.eval("quoteTotals()");
@@ -264,6 +264,24 @@ await t("retenciones: ISR 1.25% del subtotal y ⅔ del IVA, restadas del total",
   assert.ok(Math.abs(q.total - 3996.8) < 0.01, `total ${q.total}`);
   doc.getElementById("print-quote").click();
   assert.ok(printedHtml.includes("Retención IVA (⅔ del IVA)"), "falta la fila de ret IVA");
+
+  // Persona física (empresa desmarcada): la ret. de IVA NO aplica aunque sea
+  // servicio — solo las personas morales retienen IVA. El checkbox de
+  // servicio se desactiva y se desmarca solo.
+  doc.getElementById("q-ret-isr").checked = false;
+  doc.getElementById("q-ret-isr").dispatchEvent(new window.Event("change"));
+  assert.ok(doc.getElementById("q-ret-iva").disabled, "servicio debía quedar desactivado");
+  assert.ok(!doc.getElementById("q-ret-iva").checked, "servicio debía desmarcarse");
+  q = window.eval("quoteTotals()");
+  assert.strictEqual(q.retIsr, 0);
+  assert.strictEqual(q.retIva, 0);
+  assert.ok(Math.abs(q.total - 4454.4) < 0.01, `total ${q.total}`);
+
+  // De vuelta a empresa + servicio para probar el desmarcado final.
+  doc.getElementById("q-ret-isr").checked = true;
+  doc.getElementById("q-ret-isr").dispatchEvent(new window.Event("change"));
+  doc.getElementById("q-ret-iva").checked = true;
+  doc.getElementById("q-ret-iva").dispatchEvent(new window.Event("change"));
   // La barra resume las retenciones.
   assert.ok(doc.querySelector("#cotiz-bar .q-total").textContent.includes("retenciones"));
 

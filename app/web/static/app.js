@@ -3866,13 +3866,24 @@ function quoteAggregate() {
 
 /** Retenciones fiscales (SAT, México) — se RESTAN del total a cobrar:
  · Cliente persona moral: retiene el 1.25% de ISR sobre el Sub-Total.
- · Servicios: retención de IVA de dos terceras partes del IVA trasladado.
-Aplican igual a la cotización normal y a la venta directa. */
+ · Servicios a persona moral: retención de IVA de ⅔ del IVA trasladado.
+   Solo las personas morales retienen IVA: de persona física a persona
+   física (el dueño emite como física) NO aplica, por eso el checkbox de
+   servicio depende del de empresa. Aplican igual en cotización y venta. */
 function quoteRetenciones(subtotal, iva) {
+  const empresa = document.getElementById("q-ret-isr").checked;
+  const servicio = document.getElementById("q-ret-iva").checked;
   return {
-    retIsr: document.getElementById("q-ret-isr").checked ? subtotal * 0.0125 : 0,
-    retIva: document.getElementById("q-ret-iva").checked ? iva * 2 / 3 : 0,
+    retIsr: empresa ? subtotal * 0.0125 : 0,
+    retIva: empresa && servicio ? iva * 2 / 3 : 0,
   };
+}
+
+// El checkbox de servicio solo tiene efecto con cliente empresa.
+function syncRetIva() {
+  const iva = document.getElementById("q-ret-iva");
+  iva.disabled = !document.getElementById("q-ret-isr").checked;
+  if (iva.disabled) iva.checked = false;
 }
 
 // Filas de retenciones para las tablas de totales (pantalla y PDF).
@@ -4459,8 +4470,10 @@ document.getElementById("v-add-item").addEventListener("click", addVentaItem);
 // Las retenciones recalculan el modo activo (los checkboxes son compartidos).
 ["q-ret-isr", "q-ret-iva"].forEach((id) =>
   document.getElementById(id).addEventListener("change", () => {
+    syncRetIva();
     if (cotizMode === "venta") recalcVenta(); else updateSale();
   }));
+syncRetIva();
 
 function ventaTotals() {
   const lines = ventaItems().map((item) => {
